@@ -56,8 +56,18 @@ def cleanup_old_sessions():
         
         for session_id in expired_sessions:
             session_data = sessions.pop(session_id, None)
-            if session_data and 'files' in session_data:
-                for file_path in session_data['files']:
+            if session_data:
+                files_to_cleanup = set()
+
+                # Backward compatibility: some sessions might still use 'files'
+                files_to_cleanup.update(session_data.get('files', []))
+                files_to_cleanup.update(session_data.get('downloaded_files', []))
+
+                output_file = session_data.get('output_file')
+                if output_file:
+                    files_to_cleanup.add(output_file)
+
+                for file_path in files_to_cleanup:
                     try:
                         if os.path.exists(file_path):
                             os.remove(file_path)
