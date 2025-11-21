@@ -78,11 +78,12 @@ class VideoProcessor:
                 width, height = 480, 854
                 bitrate = '1500k'
             
-            # Use crop and scale filters for vertical format
-            # This crops to 9:16 aspect ratio and centers on the action
+            # Scale to fit inside the target vertical frame, then pad to 9:16.
+            # This avoids excessive zoom/cropping on landscape sources while
+            # still producing a consistent vertical output.
             filter_complex = (
-                f"[0:v]scale={width*2}:{height*2}:force_original_aspect_ratio=increase,"
-                f"crop={width}:{height},"
+                f"[0:v]scale={width}:{height}:force_original_aspect_ratio=decrease,"
+                f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black,"
                 f"setsar=1[v]"
             )
             

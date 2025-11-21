@@ -31,7 +31,7 @@ export default function Home() {
       }
 
       const data = await response.json();
-      setVideos([...videos, ...data.videos]);
+      setVideos(prev => [...prev, ...data.videos]);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Error loading videos');
       console.error('[v0] Video detection error:', err);
