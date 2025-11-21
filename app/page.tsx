@@ -7,6 +7,22 @@ import VideoPreview from '@/components/video-preview';
 import CompilationSettings from '@/components/compilation-settings';
 import ProcessingInterface from '@/components/processing-interface';
 
+const resolveApiBase = () => {
+  if (process.env.NEXT_PUBLIC_API_URL) {
+    return process.env.NEXT_PUBLIC_API_URL.replace(/\/$/, '');
+  }
+
+  if (typeof window !== 'undefined') {
+    const { protocol, hostname, port } = window.location;
+    const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1';
+    const backendPort = isLocalhost && port === '3000' ? '5000' : port;
+    const portSuffix = backendPort ? `:${backendPort}` : '';
+    return `${protocol}//${hostname}${portSuffix}`;
+  }
+
+  return '';
+};
+
 export default function Home() {
   const [videos, setVideos] = useState([]);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -19,7 +35,10 @@ export default function Home() {
   const handleAddVideos = async (urls: string[]) => {
     try {
       setError('');
-      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+      const API_URL = resolveApiBase();
+      if (!API_URL) {
+        throw new Error('Aucune URL API configurée. Définissez NEXT_PUBLIC_API_URL ou servez le backend sur ce domaine.');
+      }
       const response = await fetch(`${API_URL}/api/detect-video`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -31,7 +50,7 @@ export default function Home() {
       }
 
       const data = await response.json();
-      setVideos([...videos, ...data.videos]);
+      setVideos(prev => [...prev, ...data.videos]);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Error loading videos');
       console.error('[v0] Video detection error:', err);
@@ -55,7 +74,10 @@ export default function Home() {
       }, 400);
 
       // Call video processing API
-      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+      const API_URL = resolveApiBase();
+      if (!API_URL) {
+        throw new Error('Aucune URL API configurée. Définissez NEXT_PUBLIC_API_URL ou servez le backend sur ce domaine.');
+      }
       const response = await fetch(`${API_URL}/api/process-video`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -85,11 +107,14 @@ export default function Home() {
   const handleDownload = async (quality: string) => {
     try {
       setError('');
-      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+      const API_URL = resolveApiBase();
+      if (!API_URL) {
+        throw new Error('Aucune URL API configurée. Définissez NEXT_PUBLIC_API_URL ou servez le backend sur ce domaine.');
+      }
       const response = await fetch(`${API_URL}/api/download-video`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           sessionId: sessionId, // Store sessionId from process response
           quality 
         }),
