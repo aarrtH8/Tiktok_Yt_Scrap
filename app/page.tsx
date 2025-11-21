@@ -24,13 +24,17 @@ const resolveApiBase = () => {
 };
 
 export default function Home() {
-  const [videos, setVideos] = useState([]);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [processingProgress, setProcessingProgress] = useState(0);
-  const [bestMoments, setBestMoments] = useState([]);
-  const [step, setStep] = useState('input'); // input, processing, preview
-  const [error, setError] = useState('');
-  const [sessionId, setSessionId] = useState(''); // New state to store sessionId
+  // Define lightweight types for videos and moments to avoid `never[]` inference
+  type Video = { id: string; [key: string]: any };
+  type Moment = any;
+
+  const [videos, setVideos] = useState<Video[]>([]);
+  const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  const [processingProgress, setProcessingProgress] = useState<number>(0);
+  const [bestMoments, setBestMoments] = useState<Moment[]>([]);
+  const [step, setStep] = useState<'input' | 'processing' | 'preview'>('input'); // input, processing, preview
+  const [error, setError] = useState<string>('');
+  const [sessionId, setSessionId] = useState<string>(''); // New state to store sessionId
 
   const handleAddVideos = async (urls: string[]) => {
     try {
@@ -163,7 +167,7 @@ export default function Home() {
             )}
             
             {step === 'processing' && (
-              <ProcessingInterface progress={processingProgress} moments={bestMoments} />
+              <ProcessingInterface progress={processingProgress} moments={bestMoments} onDownload={handleDownload} />
             )}
 
             {step === 'preview' && (
