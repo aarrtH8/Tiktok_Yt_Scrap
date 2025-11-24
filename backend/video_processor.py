@@ -77,13 +77,11 @@ class VideoProcessor:
             else:  # 480p
                 width, height = 480, 854
                 bitrate = '1500k'
-            
-            # Use crop and scale filters for vertical format
-            # This crops to 9:16 aspect ratio and centers on the action
+
+            # Scale to fit inside target, then pad to 9:16 to avoid trop de zoom
             filter_complex = (
-                f"[0:v]scale={width*2}:{height*2}:force_original_aspect_ratio=increase,"
-                f"crop={width}:{height},"
-                f"setsar=1[v]"
+                f"[0:v]scale={width}:-2:force_original_aspect_ratio=decrease,"
+                f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1[v]"
             )
             
             cmd = [

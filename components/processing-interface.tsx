@@ -1,7 +1,34 @@
-import { CheckCircle, Play, Download, Video, Loader } from 'lucide-react';
+import { CheckCircle, Play, Download, Video, Loader, Clock, PauseCircle } from 'lucide-react';
 import { useState } from 'react';
 
-export default function ProcessingInterface({ progress, moments, onDownload }) {
+type Task = {
+  id: string;
+  label: string;
+  status: 'pending' | 'in_progress' | 'done';
+  progress?: number;
+  detail?: string;
+  etaSeconds?: number | null;
+};
+
+type Props = {
+  progress: number;
+  moments: any[];
+  onDownload?: (quality: string) => Promise<void> | void;
+  statusLabel?: string;
+  tasks?: Task[];
+  isProcessing?: boolean;
+  totalEtaSeconds?: number;
+};
+
+const formatSeconds = (s?: number | null) => {
+  if (s === null || s === undefined) return '';
+  if (s < 60) return `${Math.max(1, Math.round(s))}s`;
+  const mins = Math.floor(s / 60);
+  const secs = Math.round(s % 60);
+  return `${mins}m${secs.toString().padStart(2, '0')}s`;
+};
+
+export default function ProcessingInterface({ progress, moments, onDownload, statusLabel, tasks = [], isProcessing = false, totalEtaSeconds }: Props) {
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
 
@@ -57,14 +84,76 @@ export default function ProcessingInterface({ progress, moments, onDownload }) {
             />
           </div>
         </div>
-        <p className="text-xs text-muted-foreground">
-          {isDownloading
-            ? `Adding moment ${Math.ceil((downloadProgress / 100) * moments.length)} of ${moments.length}...`
-            : progress < 100
-            ? 'Analyzing videos and detecting highlights...'
-            : 'Compilation complete!'}
-        </p>
+        <div className="flex items-center justify-between text-xs text-muted-foreground">
+          <span>
+            {isDownloading
+              ? `Ajout du moment ${Math.ceil((downloadProgress / 100) * moments.length)} / ${moments.length}`
+              : progress < 100
+              ? statusLabel || 'Analyse en cours...'
+              : 'Compilation terminée'}
+          </span>
+          <span className="flex items-center gap-2">
+            {isProcessing && (
+              <span className="flex items-center gap-1">
+                <Clock className="w-3 h-3" /> Temps réel
+              </span>
+            )}
+            {totalEtaSeconds !== undefined && totalEtaSeconds !== null && !isDownloading && (
+              <span className="text-foreground">ETA totale {formatSeconds(totalEtaSeconds)}</span>
+            )}
+          </span>
+        </div>
       </div>
+
+      {/* Task details */}
+      {tasks.length > 0 && (
+        <div className="bg-muted/60 border border-border/60 rounded-lg p-4">
+          <div className="flex items-center justify-between mb-3 text-xs text-muted-foreground">
+            <p className="font-semibold">Étapes en cours</p>
+            {totalEtaSeconds !== undefined && totalEtaSeconds !== null && (
+              <span className="flex items-center gap-1">
+                <Clock className="w-3 h-3" /> ETA totale {formatSeconds(totalEtaSeconds)}
+              </span>
+            )}
+          </div>
+          <div className="space-y-2">
+            {tasks.map(task => (
+              <div key={task.id} className="flex items-center justify-between text-sm">
+                <div className="flex items-center gap-2">
+                  {task.status === 'done' ? (
+                    <CheckCircle className="w-4 h-4 text-primary" />
+                  ) : task.status === 'in_progress' ? (
+                    <Loader className="w-4 h-4 animate-spin text-primary" />
+                  ) : (
+                    <PauseCircle className="w-4 h-4 text-muted-foreground" />
+                  )}
+                  <div className="flex flex-col">
+                    <span className="text-foreground">{task.label}</span>
+                    {task.detail && (
+                      <span className="text-xs text-muted-foreground">{task.detail}</span>
+                    )}
+                  </div>
+                </div>
+                <div className="text-right text-xs text-muted-foreground">
+                  <p>
+                    {task.status === 'done'
+                      ? 'Terminé'
+                      : task.status === 'in_progress'
+                      ? 'En cours'
+                      : 'En attente'}
+                  </p>
+                  {typeof task.progress === 'number' && (
+                    <p className="mt-1">{Math.round(task.progress)}%</p>
+                  )}
+                  {task.status === 'in_progress' && task.etaSeconds !== undefined && task.etaSeconds !== null && (
+                    <p className="mt-1">ETA {formatSeconds(task.etaSeconds)}</p>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Best Moments List */}
       {moments.length > 0 && (

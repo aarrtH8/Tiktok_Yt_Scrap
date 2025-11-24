@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 class MomentDetector:
     def __init__(self):
         self.scene_threshold = 0.4
-        self.min_clip_duration = 3
-        self.max_clip_duration = 6
+        self.min_clip_duration = 6
+        self.max_clip_duration = 9
     
     def get_video_duration(self, video_path):
         """Get video duration using ffprobe"""
@@ -152,7 +152,7 @@ class MomentDetector:
             logger.error(f"Error analyzing audio: {e}")
             return []
     
-    def detect_moments(self, video_path, video_duration, target_duration, video_title):
+    def detect_moments(self, video_path, video_duration, target_duration, video_title, scene_times=None):
         """
         Detect best moments in a video
         Combines scene detection and audio analysis
@@ -161,7 +161,7 @@ class MomentDetector:
             logger.info(f"Detecting moments in {video_title}")
             
             # Get scene changes
-            scene_times = self.detect_scene_changes(video_path)
+            scene_times = scene_times if scene_times is not None else self.detect_scene_changes(video_path)
             
             # Get high-energy moments
             energy_times = self.analyze_audio_energy(video_path)
@@ -174,7 +174,7 @@ class MomentDetector:
                 return self.distribute_moments(video_duration, target_duration, video_title)
             
             # Calculate how many clips we need
-            clip_duration = 4.5  # Average clip duration
+            clip_duration = 7.0  # Average clip duration
             num_clips = max(1, int(target_duration / clip_duration))
             
             # Score each potential moment
@@ -212,7 +212,19 @@ class MomentDetector:
             for idx, moment in enumerate(selected_moments):
                 start_time = moment['timestamp']
                 clip_len = random.uniform(self.min_clip_duration, self.max_clip_duration)
-                end_time = min(start_time + clip_len, video_duration)
+
+                # Adjust to nearest scene boundaries when available to avoid mid-action cuts
+                if scene_times:
+                    prev_scenes = [t for t in scene_times if t <= start_time]
+                    next_scenes = [t for t in scene_times if t > start_time]
+                    if prev_scenes:
+                        start_time = max(prev_scenes[-1], 0)
+                    if next_scenes:
+                        end_time = min(next_scenes[0], start_time + clip_len, video_duration - 0.5)
+                    else:
+                        end_time = min(start_time + clip_len, video_duration - 0.5)
+                else:
+                    end_time = min(start_time + clip_len, video_duration - 0.5)
                 
                 minutes = int(start_time // 60)
                 seconds = int(start_time % 60)
@@ -240,7 +252,7 @@ class MomentDetector:
         Fallback method: Distribute moments evenly across the video
         with some randomness
         """
-        clip_duration = 4.5
+        clip_duration = 7.0
         num_clips = max(1, int(target_duration / clip_duration))
         
         moments = []
