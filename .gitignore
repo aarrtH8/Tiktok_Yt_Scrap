@@ -1,4 +1,13 @@
 node_modules
 .next
+.devlogs
+.node
+.ffmpeg
+.turbo
+.env*
+*.pyc
+.DS_Store
+backend/_video_temp
+_video_temp
 venv
 __pycache__

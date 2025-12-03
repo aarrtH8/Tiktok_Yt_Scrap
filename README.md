@@ -40,7 +40,8 @@ Le projet est divisé en deux parties :
 
 - Node.js 18+
 - Python 3.8+
-- FFmpeg
+- FFmpeg (le script `install_ffmpeg.sh` peut l'installer pour toi)
+- Si Node.js n'est pas disponible, exécute `./install_node.sh` pour installer une version locale
 
 ### Installation
 
@@ -133,6 +134,26 @@ Les vidéos sont automatiquement :
 - Croppées intelligemment sur le centre de l'action
 - Encodées en H.264 pour une compatibilité maximale
 - Optimisées pour la taille et la qualité
+
+### Installer FFmpeg rapidement
+
+Si FFmpeg n'est pas installé sur ta machine, tu peux télécharger un binaire statique local via :
+
+```bash
+./install_ffmpeg.sh
+```
+
+Le binaire est placé dans `.ffmpeg/bin` et sera automatiquement pris en compte par `run_app.sh`. Tu peux aussi l'ajouter à ton `PATH` manuellement si besoin.
+
+### Installer Node.js rapidement
+
+En l'absence de Node.js 18+, lance simplement :
+
+```bash
+./install_node.sh
+```
+
+Une version récente de Node.js est installée dans `.node/runtime/bin` et le script `run_app.sh` l'utilisera automatiquement.
 
 ## 🔧 API Endpoints
 

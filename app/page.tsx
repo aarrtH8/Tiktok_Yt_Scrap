@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Header from '@/components/header';
 import URLInput from '@/components/url-input';
 import VideoPreview from '@/components/video-preview';
@@ -15,6 +15,15 @@ export default function Home() {
   const [step, setStep] = useState('input'); // input, processing, preview
   const [error, setError] = useState('');
   const [sessionId, setSessionId] = useState(''); // New state to store sessionId
+  const [compiledVideoUrl, setCompiledVideoUrl] = useState('');
+
+  useEffect(() => {
+    return () => {
+      if (compiledVideoUrl) {
+        URL.revokeObjectURL(compiledVideoUrl);
+      }
+    };
+  }, [compiledVideoUrl]);
 
   const handleAddVideos = async (urls: string[]) => {
     try {
@@ -48,6 +57,10 @@ export default function Home() {
       setIsProcessing(true);
       setStep('processing');
       setProcessingProgress(0);
+      if (compiledVideoUrl) {
+        URL.revokeObjectURL(compiledVideoUrl);
+        setCompiledVideoUrl('');
+      }
 
       // Simulate progress
       const progressInterval = setInterval(() => {
@@ -85,6 +98,9 @@ export default function Home() {
   const handleDownload = async (quality: string) => {
     try {
       setError('');
+      if (!sessionId) {
+        throw new Error('Aucune session active. Relance la compilation.');
+      }
       const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
       const response = await fetch(`${API_URL}/api/download-video`, {
         method: 'POST',
@@ -96,23 +112,46 @@ export default function Home() {
       });
 
       if (!response.ok) {
-        throw new Error('Failed to download video');
+        let message = 'Failed to download video';
+        const raw = await response.text().catch(() => '');
+        if (raw) {
+          try {
+            const parsed = JSON.parse(raw);
+            if (parsed?.error) {
+              message = parsed.error;
+            } else {
+              message = raw;
+            }
+          } catch {
+            message = raw;
+          }
+        }
+        throw new Error(message);
       }
 
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
+
+      setCompiledVideoUrl(prev => {
+        if (prev) {
+          window.URL.revokeObjectURL(prev);
+        }
+        return url;
+      });
+
       const a = document.createElement('a');
       a.href = url;
       a.download = 'tiktok-compilation.mp4';
       document.body.appendChild(a);
       a.click();
-      window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Error downloading video');
       console.error('[v0] Download error:', err);
     }
   };
+
+  const canDownload = step === 'preview' && Boolean(sessionId);
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -143,16 +182,40 @@ export default function Home() {
 
             {step === 'preview' && (
               <div className="space-y-6">
-                <ProcessingInterface progress={100} moments={bestMoments} onDownload={handleDownload} />
+                <ProcessingInterface
+                  progress={100}
+                  moments={bestMoments}
+                  onDownload={canDownload ? handleDownload : undefined}
+                />
                 <div className="bg-card border border-border rounded-xl p-6">
-                  <h3 className="text-lg font-semibold mb-4">Vertical Preview (9:16)</h3>
-                  <div className="bg-muted rounded-lg aspect-[9/16] flex items-center justify-center">
-                    <div className="text-center">
-                      <div className="w-32 h-56 bg-background rounded-lg mx-auto mb-4 flex items-center justify-center">
-                        <span className="text-muted-foreground text-sm">TikTok Preview</span>
+                  <h3 className="text-lg font-semibold mb-4">Résultat final</h3>
+                  {compiledVideoUrl ? (
+                    <video
+                      key={compiledVideoUrl}
+                      controls
+                      className="w-full rounded-lg border border-border bg-black max-h-[600px]"
+                    >
+                      <source src={compiledVideoUrl} type="video/mp4" />
+                      Votre navigateur ne supporte pas la lecture vidéo.
+                    </video>
+                  ) : (
+                    <div className="bg-muted rounded-lg aspect-[9/16] flex items-center justify-center">
+                      <div className="text-center space-y-3">
+                        <div className="w-32 h-56 bg-background rounded-lg mx-auto flex items-center justify-center">
+                          <span className="text-muted-foreground text-sm text-center px-4">
+                            {canDownload
+                              ? 'Clique sur “Download Video” pour générer la prévisualisation.'
+                              : 'Prévisualisation disponible après la compilation.'}
+                          </span>
+                        </div>
+                        {!canDownload && (
+                          <p className="text-xs text-muted-foreground">
+                            Assure-toi que la compilation est terminée puis relance le téléchargement.
+                          </p>
+                        )}
                       </div>
                     </div>
-                  </div>
+                  )}
                 </div>
               </div>
             )}

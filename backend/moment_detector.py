@@ -9,6 +9,7 @@ import logging
 import numpy as np
 from pathlib import Path
 import random
+import bisect
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +18,8 @@ class MomentDetector:
     def __init__(self):
         self.scene_threshold = 0.4
         self.min_clip_duration = 3
-        self.max_clip_duration = 6
+        self.max_clip_duration = 8
+        self.scene_padding = 0.75
     
     def get_video_duration(self, video_path):
         """Get video duration using ffprobe"""
@@ -210,13 +212,17 @@ class MomentDetector:
             engagement_levels = ['High', 'Medium', 'High', 'Medium']
             
             for idx, moment in enumerate(selected_moments):
-                start_time = moment['timestamp']
-                clip_len = random.uniform(self.min_clip_duration, self.max_clip_duration)
-                end_time = min(start_time + clip_len, video_duration)
-                
+                clip_len = random.uniform(self.min_clip_duration + 0.5, self.max_clip_duration)
+                start_time, end_time = self._determine_clip_window(
+                    moment['timestamp'],
+                    clip_len,
+                    video_duration,
+                    scene_times
+                )
+
                 minutes = int(start_time // 60)
                 seconds = int(start_time % 60)
-                
+
                 moments.append({
                     'start': start_time,
                     'end': end_time,
@@ -272,7 +278,41 @@ class MomentDetector:
             })
         
         return moments
-    
+
+    def _determine_clip_window(self, timestamp, desired_length, video_duration, scene_times):
+        """Expand a clip around a timestamp to capture the full moment"""
+        base_start = timestamp - (desired_length / 2)
+        base_end = timestamp + (desired_length / 2)
+        start = max(0.0, base_start)
+        end = min(video_duration, base_end)
+
+        if scene_times:
+            insert_pos = bisect.bisect_left(scene_times, timestamp)
+            prev_scene = scene_times[insert_pos - 1] if insert_pos > 0 else 0.0
+            next_scene = scene_times[insert_pos] if insert_pos < len(scene_times) else video_duration
+
+            start = min(start, prev_scene) - self.scene_padding
+            end = max(end, next_scene) + self.scene_padding
+            start = max(0.0, start)
+            end = min(video_duration, end)
+
+        clip_len = end - start
+        if clip_len < self.min_clip_duration:
+            deficit = self.min_clip_duration - clip_len
+            start = max(0.0, start - deficit / 2)
+            end = min(video_duration, end + deficit / 2)
+
+        clip_len = end - start
+        max_allowed = self.max_clip_duration + 1.5
+        if clip_len > max_allowed:
+            excess = clip_len - max_allowed
+            start += excess / 2
+            end -= excess / 2
+            start = max(0.0, start)
+            end = min(video_duration, end)
+
+        return start, end
+
     def _generate_moment_title(self, index, score):
         """Generate a descriptive title for a moment"""
         if score > 0.85:

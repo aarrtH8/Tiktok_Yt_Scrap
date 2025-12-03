@@ -11,6 +11,7 @@ import sys
 import json
 import uuid
 import logging
+import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -30,9 +31,34 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 CORS(app)
 
-# Configuration
-TEMP_DIR = Path("/tmp/video-compiler")
-TEMP_DIR.mkdir(exist_ok=True)
+# Configuration helpers
+def create_temp_root():
+    """Ensure we have a writable temp directory even if /tmp is not usable"""
+    candidates = []
+    env_override = os.environ.get('VIDEO_COMPILER_TEMP')
+    if env_override:
+        candidates.append(Path(env_override))
+    candidates.append(Path(tempfile.gettempdir()) / "video-compiler")
+    # fallback inside project directory
+    project_tmp = Path(__file__).resolve().parent / "_video_temp"
+    candidates.append(project_tmp)
+
+    for candidate in candidates:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            test_file = candidate / f".perm_{os.getpid()}"
+            with open(test_file, 'w') as f:
+                f.write('ok')
+            test_file.unlink(missing_ok=True)
+            logger.info(f"Using temp directory: {candidate}")
+            return candidate
+        except Exception as e:
+            logger.warning(f"Temp dir {candidate} not usable: {e}")
+            continue
+    raise RuntimeError("Unable to create writable temp directory for video compilation")
+
+
+TEMP_DIR = create_temp_root()
 SESSIONS_DIR = TEMP_DIR / "sessions"
 SESSIONS_DIR.mkdir(exist_ok=True)
 

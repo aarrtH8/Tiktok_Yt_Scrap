@@ -6,7 +6,13 @@ Handles video compilation and format conversion to TikTok format (9:16)
 import subprocess
 import logging
 import os
+import json
+import statistics
+import shutil
+import tempfile
 from pathlib import Path
+
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -14,8 +20,111 @@ logger = logging.getLogger(__name__)
 class VideoProcessor:
     def __init__(self, temp_dir):
         self.temp_dir = Path(temp_dir)
-        self.temp_dir.mkdir(exist_ok=True)
+        self.temp_dir.mkdir(parents=True, exist_ok=True)
     
+    def _get_video_resolution(self, video_path):
+        """Return width and height information for a video"""
+        try:
+            cmd = [
+                'ffprobe',
+                '-v', 'error',
+                '-select_streams', 'v:0',
+                '-show_entries', 'stream=width,height',
+                '-of', 'json',
+                video_path
+            ]
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=15
+            )
+            if result.returncode != 0:
+                return {}
+            data = json.loads(result.stdout)
+            if not data.get('streams'):
+                return {}
+            stream = data['streams'][0]
+            return {
+                'width': stream.get('width'),
+                'height': stream.get('height')
+            }
+        except Exception as exc:
+            logger.warning(f"Unable to read video resolution: {exc}")
+            return {}
+
+    def _estimate_focus_center(self, video_path, sample_frames=12):
+        """Estimate the horizontal focus point to drive smart cropping"""
+        try:
+            import cv2
+        except ImportError:
+            logger.warning("OpenCV not installed; falling back to center crop")
+            return 0.5
+
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            return 0.5
+
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+        target_samples = sample_frames if frame_count == 0 else min(sample_frames, frame_count)
+        step = max(frame_count // target_samples, 1) if frame_count else 1
+
+        focus_points = []
+        current = 0
+        while True:
+            if frame_count:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, current)
+
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            laplacian = cv2.Laplacian(gray, cv2.CV_64F)
+            response = np.abs(laplacian)
+            height, width = response.shape
+            slices = 6
+            slice_width = max(1, width // slices)
+            best_score = -1
+            best_center = width / 2
+
+            for idx in range(slices):
+                start = idx * slice_width
+                end = width if idx == slices - 1 else (idx + 1) * slice_width
+                region = response[:, start:end]
+                if region.size == 0:
+                    continue
+                score = float(np.mean(region))
+                if score > best_score:
+                    best_score = score
+                    best_center = start + (end - start) / 2
+
+            focus_points.append(best_center / max(width, 1))
+
+            if len(focus_points) >= target_samples:
+                break
+
+            if frame_count:
+                current += step
+                if current >= frame_count:
+                    break
+            else:
+                # Sequential sampling when frame count is unavailable
+                continue
+
+        cap.release()
+
+        if not focus_points:
+            return 0.5
+
+        median_focus = statistics.median(focus_points)
+        return float(max(0.1, min(0.9, median_focus)))
+    
+    def _create_work_dir(self):
+        path = Path(tempfile.mkdtemp(prefix='session_', dir=str(self.temp_dir)))
+        logger.debug(f"Created work directory {path}")
+        return path
+
     def check_ffmpeg(self):
         """Check if FFmpeg is available"""
         try:
@@ -79,12 +188,49 @@ class VideoProcessor:
                 bitrate = '1500k'
             
             # Use crop and scale filters for vertical format
-            # This crops to 9:16 aspect ratio and centers on the action
-            filter_complex = (
-                f"[0:v]scale={width*2}:{height*2}:force_original_aspect_ratio=increase,"
-                f"crop={width}:{height},"
-                f"setsar=1[v]"
-            )
+            # Smart cropping tries to keep the most active area visible
+            metadata = self._get_video_resolution(input_path)
+            src_width = metadata.get('width')
+            src_height = metadata.get('height')
+            target_aspect = width / height if height else (9 / 16)
+            filter_complex = None
+            focus_center = 0.5
+            smart_crop_applied = False
+
+            if src_width and src_height:
+                src_aspect = src_width / src_height if src_height else target_aspect
+                if src_aspect > target_aspect + 0.02:
+                    focus_center = self._estimate_focus_center(input_path)
+                    scale_ratio = height / src_height
+                    scaled_width = src_width * scale_ratio
+                    if scaled_width >= width:
+                        crop_x = max(
+                            0.0,
+                            min(scaled_width * focus_center - (width / 2), scaled_width - width)
+                        )
+                        filter_complex = (
+                            f"[0:v]scale=-2:{height}:force_original_aspect_ratio=increase,"
+                            f"crop={width}:{height}:{crop_x:.2f}:0,"
+                            f"setsar=1[v]"
+                        )
+                        smart_crop_applied = True
+
+            if not filter_complex:
+                if src_width and src_height and src_width / src_height <= target_aspect + 0.01:
+                    filter_complex = (
+                        f"[0:v]scale={width}:{height}:force_original_aspect_ratio=decrease,"
+                        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,"
+                        f"setsar=1[v]"
+                    )
+                else:
+                    filter_complex = (
+                        f"[0:v]scale={width*2}:{height*2}:force_original_aspect_ratio=increase,"
+                        f"crop={width}:{height},"
+                        f"setsar=1[v]"
+                    )
+
+            if smart_crop_applied:
+                logger.info(f"Smart focus crop applied at {focus_center:.2f}")
             
             cmd = [
                 'ffmpeg',
@@ -180,14 +326,15 @@ class VideoProcessor:
         Takes list of clips with {file_path, start, end}
         Creates a vertical TikTok video with transitions
         """
+        work_dir = self._create_work_dir()
+        temp_clips = []
         try:
             logger.info(f"Compiling {len(clips_data)} clips into TikTok format")
             
             # Step 1: Extract and prepare clips
-            temp_clips = []
             for idx, clip_data in enumerate(clips_data):
                 # Extract clip
-                clip_path = self.temp_dir / f"clip_{idx}_{os.getpid()}.mp4"
+                clip_path = work_dir / f"clip_{idx}_{os.getpid()}.mp4"
                 self.extract_clip(
                     clip_data['file_path'],
                     str(clip_path),
@@ -196,29 +343,25 @@ class VideoProcessor:
                 )
                 
                 # Convert to vertical format
-                vertical_path = self.temp_dir / f"vertical_{idx}_{os.getpid()}.mp4"
+                vertical_path = work_dir / f"vertical_{idx}_{os.getpid()}.mp4"
                 self.convert_to_vertical(str(clip_path), str(vertical_path), quality)
                 
                 temp_clips.append(str(vertical_path))
                 
-                # Clean up intermediate clip
                 if clip_path.exists():
-                    os.remove(clip_path)
+                    clip_path.unlink()
             
             logger.info("All clips extracted and converted to vertical format")
             
             # Step 2: Concatenate clips with transitions
             if len(temp_clips) == 1:
-                # Single clip, just copy
                 os.rename(temp_clips[0], output_path)
             else:
-                # Create concat file
-                concat_file = self.temp_dir / f"concat_{os.getpid()}.txt"
+                concat_file = work_dir / f"concat_{os.getpid()}.txt"
                 with open(concat_file, 'w') as f:
                     for clip in temp_clips:
                         f.write(f"file '{clip}'\n")
                 
-                # Concatenate with crossfade
                 cmd = [
                     'ffmpeg',
                     '-y',
@@ -237,7 +380,6 @@ class VideoProcessor:
                 )
                 
                 if result.returncode != 0:
-                    # Fallback: re-encode if concat fails
                     cmd = [
                         'ffmpeg',
                         '-y',
@@ -260,27 +402,14 @@ class VideoProcessor:
                     
                     if result.returncode != 0:
                         raise RuntimeError(f"FFmpeg concat error: {result.stderr}")
-                
-                # Clean up concat file
-                if concat_file.exists():
-                    os.remove(concat_file)
-            
-            # Clean up temporary clips
-            for clip in temp_clips:
-                try:
-                    if os.path.exists(clip):
-                        os.remove(clip)
-                except Exception as e:
-                    logger.warning(f"Could not remove temp clip {clip}: {e}")
             
             logger.info(f"Compilation complete: {output_path}")
             
-            # Verify output file exists and has size
             if not os.path.exists(output_path):
                 raise RuntimeError("Output file was not created")
             
             file_size = os.path.getsize(output_path)
-            if file_size < 1000:  # Less than 1KB is probably invalid
+            if file_size < 1000:
                 raise RuntimeError(f"Output file too small ({file_size} bytes)")
             
             logger.info(f"Output file size: {file_size / (1024*1024):.2f} MB")
@@ -289,13 +418,6 @@ class VideoProcessor:
         
         except Exception as e:
             logger.error(f"Error in compile_tiktok_video: {e}")
-            
-            # Clean up on error
-            for clip in temp_clips:
-                try:
-                    if os.path.exists(clip):
-                        os.remove(clip)
-                except Exception:
-                    pass
-            
             raise
+        finally:
+            shutil.rmtree(work_dir, ignore_errors=True)

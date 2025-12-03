@@ -1,9 +1,11 @@
 import { CheckCircle, Play, Download, Video, Loader } from 'lucide-react';
 import { useState } from 'react';
 
-export default function ProcessingInterface({ progress, moments, onDownload }) {
+export default function ProcessingInterface({ progress, moments = [], onDownload }) {
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
+  const hasMoments = Array.isArray(moments) && moments.length > 0;
+  const showExportOptions = typeof onDownload === 'function';
 
   const handleDownloadWithProgress = async (quality: string) => {
     setIsDownloading(true);
@@ -59,7 +61,9 @@ export default function ProcessingInterface({ progress, moments, onDownload }) {
         </div>
         <p className="text-xs text-muted-foreground">
           {isDownloading
-            ? `Adding moment ${Math.ceil((downloadProgress / 100) * moments.length)} of ${moments.length}...`
+            ? hasMoments
+              ? `Adding moment ${Math.min(Math.ceil((downloadProgress / 100) * moments.length), moments.length)} of ${moments.length}...`
+              : 'Preparing your video...'
             : progress < 100
             ? 'Analyzing videos and detecting highlights...'
             : 'Compilation complete!'}
@@ -67,7 +71,7 @@ export default function ProcessingInterface({ progress, moments, onDownload }) {
       </div>
 
       {/* Best Moments List */}
-      {moments.length > 0 && (
+      {hasMoments && (
         <div className="bg-card border border-border rounded-xl p-6">
           <h3 className="font-semibold mb-4 flex items-center gap-2">
             <CheckCircle className="w-5 h-5 text-primary" />
@@ -120,7 +124,7 @@ export default function ProcessingInterface({ progress, moments, onDownload }) {
       )}
 
       {/* Preview and Export */}
-      {moments.length > 0 && (
+      {showExportOptions && (
         <div className="bg-card border border-border rounded-xl p-6">
           <h3 className="font-semibold mb-4">Export Options</h3>
           <div className="space-y-3">
