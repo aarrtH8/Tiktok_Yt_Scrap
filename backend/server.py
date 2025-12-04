@@ -248,13 +248,13 @@ def process_videos():
                 logger.error(f"Error processing video {video['title']}: {e}")
                 continue
         
-        # Sort moments by score and select best ones
+        # Sort moments by score and select best ones, keeping the strongest clips first
         clip_duration = 4.5
         target_clip_count = int(output_duration / clip_duration)
-        top_moments = sorted(all_moments, key=lambda x: x['score'], reverse=True)[:target_clip_count]
-        
-        # Sort by order for final video
-        top_moments = sorted(top_moments, key=lambda x: (x['videoIndex'], x['start']))
+        top_moments = sorted(
+            all_moments,
+            key=lambda x: (-x['score'], x.get('start', 0.0))
+        )[:target_clip_count]
         
         # Update session
         session_data['downloaded_files'] = downloaded_files
