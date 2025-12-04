@@ -179,6 +179,7 @@ def process_videos():
         output_duration = int(settings.get('duration', 30))
         quality = settings.get('quality', '720p')
         auto_detect = settings.get('autoDetect', True)
+        include_subtitles = settings.get('includeSubtitles', True)
         
         logger.info(f"Processing {len(videos)} videos for {output_duration}s compilation")
         
@@ -212,7 +213,8 @@ def process_videos():
                 video_path, subtitle_path = youtube_downloader.download_video(
                     video_url,
                     session_id,
-                    video_id
+                    video_id,
+                    download_subtitles=include_subtitles
                 )
                 downloaded_files.append(video_path)
                 subtitle_files.append(subtitle_path)

@@ -7,6 +7,7 @@ export default function CompilationSettings({ onGenerate, videosCount, isProcess
   const [duration, setDuration] = useState('30');
   const [autoDetect, setAutoDetect] = useState(true);
   const [quality, setQuality] = useState('1080p');
+  const [includeSubtitles, setIncludeSubtitles] = useState(true);
 
 
   const handleGenerate = () => {
@@ -14,6 +15,7 @@ export default function CompilationSettings({ onGenerate, videosCount, isProcess
       duration,
       autoDetect,
       quality,
+      includeSubtitles,
     });
   };
 
@@ -69,6 +71,26 @@ export default function CompilationSettings({ onGenerate, videosCount, isProcess
             <div
               className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${
                 autoDetect ? 'translate-x-4' : ''
+              }`}
+            />
+          </button>
+        </div>
+
+        {/* Subtitle Toggle */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium">Sous-titres</span>
+            <span className="text-xs text-muted-foreground">(optionnel)</span>
+          </div>
+          <button
+            onClick={() => setIncludeSubtitles(!includeSubtitles)}
+            className={`relative w-10 h-6 rounded-full transition-colors ${
+              includeSubtitles ? 'bg-primary' : 'bg-muted'
+            }`}
+          >
+            <div
+              className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${
+                includeSubtitles ? 'translate-x-4' : ''
               }`}
             />
           </button>

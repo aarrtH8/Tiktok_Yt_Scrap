@@ -77,44 +77,8 @@ class YouTubeDownloader:
             logger.error(f"Error getting metadata for {url}: {e}")
             raise
     
-    def _find_subtitle_file(self, base_output: Path):
-        """Locate a downloaded subtitle file near the video output"""
-        base = base_output.with_suffix('')
-        candidates = list(base.parent.glob(f"{base.name}*.srt"))
-
-        if candidates:
-            return candidates[0]
-
-        # Try to convert VTT to SRT if available
-        vtt_candidates = list(base.parent.glob(f"{base.name}*.vtt"))
-        if not vtt_candidates:
-            return None
-
-        vtt_path = vtt_candidates[0]
-        srt_path = vtt_path.with_suffix('.srt')
-        try:
-            cmd = [
-                'ffmpeg',
-                '-y',
-                '-i',
-                str(vtt_path),
-                str(srt_path)
-            ]
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=60
-            )
-            if result.returncode == 0 and srt_path.exists():
-                return srt_path
-        except Exception as exc:
-            logger.warning(f"Failed to convert VTT subtitles: {exc}")
-
-        return None
-
     def download_video(self, url, session_id, video_id):
-        """Download video and optional subtitles. Returns (video_path, subtitle_path)."""
+        """Download video and return the file path"""
         try:
             output_path = self.temp_dir / f"{session_id}_{video_id}.mp4"
 
@@ -124,10 +88,6 @@ class YouTubeDownloader:
                 'quiet': False,
                 'no_warnings': False,
                 'extract_audio': False,
-                'writesubtitles': True,
-                'writeautomaticsub': True,
-                'subtitlesformat': 'srt',
-                'subtitleslangs': ['fr', 'en', 'fr.*', 'en.*'],
                 'postprocessors': [{
                     'key': 'FFmpegVideoConvertor',
                     'preferedformat': 'mp4',
@@ -150,13 +110,7 @@ class YouTubeDownloader:
 
             if not output_path.exists():
                 raise FileNotFoundError(f"Downloaded video not found at {output_path}")
-
-            subtitle_path = self._find_subtitle_file(output_path)
-            if subtitle_path:
-                logger.info(f"Captured subtitles at {subtitle_path}")
-            else:
-                logger.info("No subtitles available for this video")
-
+            
             logger.info(f"Successfully downloaded to {output_path}")
             return str(output_path), str(subtitle_path) if subtitle_path else None
 
