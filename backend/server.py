@@ -199,6 +199,7 @@ def process_videos():
         # Download videos and detect moments
         all_moments = []
         downloaded_files = []
+        subtitle_files = []
         
         for idx, video in enumerate(videos):
             try:
@@ -208,12 +209,13 @@ def process_videos():
                 logger.info(f"Downloading video {idx + 1}/{len(videos)}: {video['title']}")
                 
                 # Download video
-                video_path = youtube_downloader.download_video(
+                video_path, subtitle_path = youtube_downloader.download_video(
                     video_url,
                     session_id,
                     video_id
                 )
                 downloaded_files.append(video_path)
+                subtitle_files.append(subtitle_path)
                 
                 logger.info(f"Analyzing video for best moments...")
                 
@@ -258,6 +260,7 @@ def process_videos():
         session_data['downloaded_files'] = downloaded_files
         session_data['moments'] = top_moments
         session_data['status'] = 'ready'
+        session_data['subtitle_files'] = subtitle_files
         
         logger.info(f"Session {session_id} ready with {len(top_moments)} moments")
         
@@ -315,6 +318,7 @@ def download_video():
         
         moments = session_data['moments']
         downloaded_files = session_data['downloaded_files']
+        subtitle_files = session_data.get('subtitle_files', [])
         
         # Create clips data for compilation
         clips = []
@@ -324,7 +328,8 @@ def download_video():
                 clips.append({
                     'file_path': downloaded_files[video_index],
                     'start': moment['start'],
-                    'end': moment['end']
+                    'end': moment['end'],
+                    'subtitle_path': subtitle_files[video_index] if video_index < len(subtitle_files) else None
                 })
         
         # Compile video in TikTok format (9:16)
@@ -356,6 +361,11 @@ def download_video():
                     if os.path.exists(file_path):
                         os.remove(file_path)
                 
+                # Clean up subtitle files
+                for sub_path in subtitle_files:
+                    if sub_path and os.path.exists(sub_path):
+                        os.remove(sub_path)
+
                 # Clean up output file
                 if os.path.exists(output_path):
                     os.remove(output_path)
@@ -382,7 +392,7 @@ def delete_session(session_id):
         
         if not session_data:
             return jsonify({'error': 'Session not found'}), 404
-        
+
         # Clean up files
         for file_path in session_data.get('downloaded_files', []):
             try:
@@ -390,7 +400,14 @@ def delete_session(session_id):
                     os.remove(file_path)
             except Exception as e:
                 logger.error(f"Error removing file {file_path}: {e}")
-        
+
+        for sub_path in session_data.get('subtitle_files', []):
+            try:
+                if sub_path and os.path.exists(sub_path):
+                    os.remove(sub_path)
+            except Exception as e:
+                logger.error(f"Error removing subtitle file {sub_path}: {e}")
+
         return jsonify({'success': True})
     
     except Exception as e:

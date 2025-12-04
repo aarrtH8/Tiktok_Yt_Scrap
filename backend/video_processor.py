@@ -21,6 +21,113 @@ class VideoProcessor:
     def __init__(self, temp_dir):
         self.temp_dir = Path(temp_dir)
         self.temp_dir.mkdir(parents=True, exist_ok=True)
+
+    def _time_str_to_seconds(self, timestamp: str) -> float:
+        try:
+            hms, millis = timestamp.split(',')
+            hours, minutes, seconds = hms.split(':')
+            return (
+                int(hours) * 3600
+                + int(minutes) * 60
+                + int(seconds)
+                + int(millis) / 1000.0
+            )
+        except Exception:
+            return 0.0
+
+    def _seconds_to_time_str(self, seconds: float) -> str:
+        total_ms = max(0, int(round(seconds * 1000)))
+        ms = total_ms % 1000
+        total_seconds = total_ms // 1000
+        s = total_seconds % 60
+        total_minutes = total_seconds // 60
+        m = total_minutes % 60
+        h = total_minutes // 60
+        return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+    def _slice_subtitles(self, subtitle_path, clip_start, clip_end, work_dir):
+        """Trim and shift subtitles to align with a clip window"""
+        if not subtitle_path or not Path(subtitle_path).exists():
+            return None
+
+        try:
+            raw_lines = Path(subtitle_path).read_text(encoding='utf-8', errors='ignore').splitlines()
+        except Exception:
+            return None
+
+        entries = []
+        idx = 0
+        while idx < len(raw_lines):
+            line = raw_lines[idx].strip()
+            if not line:
+                idx += 1
+                continue
+
+            try:
+                int(line)
+            except ValueError:
+                idx += 1
+                continue
+
+            idx += 1
+            if idx >= len(raw_lines):
+                break
+
+            time_line = raw_lines[idx].strip()
+            idx += 1
+            if '-->' not in time_line:
+                continue
+
+            try:
+                start_str, end_str = [segment.strip() for segment in time_line.split('-->')]
+                start_time = self._time_str_to_seconds(start_str)
+                end_time = self._time_str_to_seconds(end_str)
+            except Exception:
+                continue
+
+            text_lines = []
+            while idx < len(raw_lines) and raw_lines[idx].strip():
+                text_lines.append(raw_lines[idx].strip())
+                idx += 1
+
+            # Skip the blank separator
+            while idx < len(raw_lines) and not raw_lines[idx].strip():
+                idx += 1
+
+            if not text_lines:
+                continue
+
+            entries.append((start_time, end_time, '\n'.join(text_lines)))
+
+        if not entries:
+            return None
+
+        clip_duration = clip_end - clip_start
+        trimmed_entries = []
+        for start_time, end_time, text in entries:
+            adjusted_start = start_time - clip_start
+            adjusted_end = end_time - clip_start
+
+            if adjusted_end <= 0 or adjusted_start >= clip_duration:
+                continue
+
+            adjusted_start = max(0.0, adjusted_start)
+            adjusted_end = min(clip_duration, adjusted_end)
+            trimmed_entries.append((adjusted_start, adjusted_end, text))
+
+        if not trimmed_entries:
+            return None
+
+        output_path = Path(work_dir) / f"sub_{os.getpid()}_{int(clip_start * 1000)}.srt"
+        with open(output_path, 'w', encoding='utf-8') as handle:
+            for idx, (start_time, end_time, text) in enumerate(trimmed_entries, start=1):
+                handle.write(f"{idx}\n")
+                handle.write(
+                    f"{self._seconds_to_time_str(start_time)} --> {self._seconds_to_time_str(end_time)}\n"
+                )
+                handle.write(f"{text}\n\n")
+
+        return str(output_path)
     
     def _get_video_resolution(self, video_path):
         """Return width and height information for a video"""
@@ -170,10 +277,10 @@ class VideoProcessor:
             logger.error(f"Error extracting clip: {e}")
             raise
     
-    def convert_to_vertical(self, input_path, output_path, quality='720p'):
+    def convert_to_vertical(self, input_path, output_path, quality='720p', subtitle_path=None):
         """
         Convert video to vertical TikTok format (9:16)
-        Applies smart cropping to focus on center/action
+        Applies smart cropping to focus on center/action and optionally burns subtitles
         """
         try:
             # Determine output resolution based on quality
@@ -186,6 +293,15 @@ class VideoProcessor:
             else:  # 480p
                 width, height = 480, 854
                 bitrate = '1500k'
+
+            subtitle_filter = ""
+            if subtitle_path and Path(subtitle_path).exists():
+                escaped = str(Path(subtitle_path)).replace("'", "\\'")
+                style = (
+                    "Fontname=Montserrat,Fontsize=26,PrimaryColour=&H00FFFFFF&,BackColour=&H60000000&,"
+                    "Outline=1,Shadow=1,MarginV=40,MarginL=36,MarginR=36"
+                )
+                subtitle_filter = f",subtitles='{escaped}':force_style='{style}'"
             
             # Use crop and scale filters for vertical format
             # Smart cropping tries to keep the most active area visible
@@ -200,33 +316,51 @@ class VideoProcessor:
             if src_width and src_height:
                 src_aspect = src_width / src_height if src_height else target_aspect
                 if src_aspect > target_aspect + 0.02:
+                    # Wide video – keep more of the frame visible with a gentle dezoom
                     focus_center = self._estimate_focus_center(input_path)
+
+                    # Background layer: fill the 9:16 frame, cropped around the focus point, with blur
                     scale_ratio = height / src_height
                     scaled_width = src_width * scale_ratio
-                    if scaled_width >= width:
-                        crop_x = max(
-                            0.0,
-                            min(scaled_width * focus_center - (width / 2), scaled_width - width)
-                        )
-                        filter_complex = (
-                            f"[0:v]scale=-2:{height}:force_original_aspect_ratio=increase,"
-                            f"crop={width}:{height}:{crop_x:.2f}:0,"
-                            f"setsar=1[v]"
-                        )
-                        smart_crop_applied = True
+                    crop_x = max(
+                        0.0,
+                        min(scaled_width * focus_center - (width / 2), scaled_width - width)
+                    )
+
+                    # Foreground layer: slightly smaller to reduce aggressive zooming
+                    dezoom_ratio = 0.94
+                    fg_width = max(2, int(width * dezoom_ratio))
+                    fg_height = max(2, int(height * dezoom_ratio))
+                    fg_scaled_height = int(fg_width / max(src_aspect, 0.1))
+                    if fg_scaled_height > fg_height:
+                        fg_scaled_height = fg_height
+                        fg_width = int(fg_scaled_height * src_aspect)
+
+                    pad_x = int(max(0, min(width * focus_center - fg_width / 2, width - fg_width)))
+                    pad_y = max((height - fg_scaled_height) // 2, 0)
+
+                    filter_complex = (
+                        f"[0:v]scale=-2:{height}:force_original_aspect_ratio=increase,"
+                        f"crop={width}:{height}:{crop_x:.2f}:0,"
+                        f"gblur=sigma=20[bg];"
+                        f"[0:v]scale={fg_width}:{fg_height}:force_original_aspect_ratio=decrease,"
+                        f"pad={width}:{height}:{pad_x}:{pad_y}:color=black[fg];"
+                        f"[bg][fg]overlay=0:0,setsar=1{subtitle_filter}[v]"
+                    )
+                    smart_crop_applied = True
 
             if not filter_complex:
                 if src_width and src_height and src_width / src_height <= target_aspect + 0.01:
                     filter_complex = (
                         f"[0:v]scale={width}:{height}:force_original_aspect_ratio=decrease,"
                         f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,"
-                        f"setsar=1[v]"
+                        f"setsar=1{subtitle_filter}[v]"
                     )
                 else:
                     filter_complex = (
                         f"[0:v]scale={width*2}:{height*2}:force_original_aspect_ratio=increase,"
                         f"crop={width}:{height},"
-                        f"setsar=1[v]"
+                        f"setsar=1{subtitle_filter}[v]"
                     )
 
             if smart_crop_applied:
@@ -323,7 +457,7 @@ class VideoProcessor:
     def compile_tiktok_video(self, clips_data, output_path, quality='720p'):
         """
         Main compilation function
-        Takes list of clips with {file_path, start, end}
+        Takes list of clips with {file_path, start, end, subtitle_path?}
         Creates a vertical TikTok video with transitions
         """
         work_dir = self._create_work_dir()
@@ -344,7 +478,21 @@ class VideoProcessor:
                 
                 # Convert to vertical format
                 vertical_path = work_dir / f"vertical_{idx}_{os.getpid()}.mp4"
-                self.convert_to_vertical(str(clip_path), str(vertical_path), quality)
+                sliced_subtitle = None
+                if clip_data.get('subtitle_path'):
+                    sliced_subtitle = self._slice_subtitles(
+                        clip_data['subtitle_path'],
+                        clip_data['start'],
+                        clip_data['end'],
+                        work_dir
+                    )
+
+                self.convert_to_vertical(
+                    str(clip_path),
+                    str(vertical_path),
+                    quality,
+                    subtitle_path=sliced_subtitle
+                )
                 
                 temp_clips.append(str(vertical_path))
                 
