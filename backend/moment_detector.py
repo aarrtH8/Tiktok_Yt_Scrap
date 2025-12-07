@@ -248,6 +248,7 @@ class MomentDetector:
         """
         clip_duration = 4.5
         num_clips = max(1, int(target_duration / clip_duration))
+        safe_duration = max(video_duration, clip_duration + 2)
         
         moments = []
         engagement_levels = ['High', 'Medium', 'High', 'Medium']
@@ -255,12 +256,14 @@ class MomentDetector:
         for i in range(num_clips):
             # Distribute evenly with some variance
             position = (i + 1) / (num_clips + 1)
-            base_start = video_duration * position
-            variance = (random.random() - 0.5) * (video_duration * 0.1)
+            base_start = safe_duration * position
+            variance = (random.random() - 0.5) * (safe_duration * 0.1)
             
-            start_time = max(5, min(base_start + variance, video_duration - 5))
+            start_time = max(0.0, min(base_start + variance, safe_duration - 1))
             clip_len = random.uniform(self.min_clip_duration, self.max_clip_duration)
-            end_time = min(start_time + clip_len, video_duration)
+            end_time = min(start_time + clip_len, safe_duration)
+            if end_time - start_time < self.min_clip_duration / 2:
+                end_time = min(start_time + self.min_clip_duration, safe_duration)
             
             minutes = int(start_time // 60)
             seconds = int(start_time % 60)
@@ -271,7 +274,7 @@ class MomentDetector:
                 'start': start_time,
                 'end': end_time,
                 'timestamp': f"{minutes}:{seconds:02d}",
-                'duration': f"{int(end_time - start_time)}s",
+                'duration': f"{max(1, int(end_time - start_time))}s",
                 'title': self._generate_moment_title(i, score),
                 'score': score,
                 'engagementLevel': engagement_levels[i % len(engagement_levels)]
