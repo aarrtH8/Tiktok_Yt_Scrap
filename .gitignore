@@ -1,5 +1,7 @@
 node_modules
+node_modules_root
 .next
+.next/cache
 .devlogs
 .node
 .ffmpeg
@@ -11,3 +13,14 @@ backend/_video_temp
 _video_temp
 venv
 __pycache__
+
+# Local tooling caches & user files
+.npm
+.pnpm-store
+.yarn
+.cache
+.vscode
+.idea
+.wget-hsts
+*.log
+npm-debug.log*
