@@ -47,7 +47,14 @@ cleanup() {
 
 trap cleanup INT TERM
 
-command_exists python3 || { echo "Python 3 est requis" >&2; exit 1; }
+PYTHON_BIN="python3"
+if [[ -x "$ROOT_DIR/venv/bin/python" ]]; then
+    PYTHON_BIN="$ROOT_DIR/venv/bin/python"
+elif [[ -x "$ROOT_DIR/.venv/bin/python" ]]; then
+    PYTHON_BIN="$ROOT_DIR/.venv/bin/python"
+fi
+
+command_exists "$PYTHON_BIN" || { echo "Python 3 est requis" >&2; exit 1; }
 
 if command_exists ffmpeg; then
     FFMPEG_BIN="$(command -v ffmpeg)"
@@ -68,22 +75,27 @@ LOCAL_NODE_RUNTIME_BIN="$ROOT_DIR/.node/runtime/bin"
 LEGACY_NODE_BIN_DIR="$ROOT_DIR/.node/bin"
 LOCAL_NODE_DIR_RESOLVED=""
 
+REQUIRED_NODE_MAJOR=20
+REQUIRED_NODE_MINOR=9
+
 use_local_node() {
     if [[ -x "$LOCAL_NODE_RUNTIME_BIN/node" ]]; then
         LOCAL_NODE_DIR_RESOLVED="$LOCAL_NODE_RUNTIME_BIN"
     elif [[ -x "$LEGACY_NODE_BIN_DIR/node" ]]; then
         LOCAL_NODE_DIR_RESOLVED="$LEGACY_NODE_BIN_DIR"
     else
-        echo "Node.js 18+ est requis." >&2
-        echo "Exécute ./install_node.sh pour installer une version locale ou installe Node 18 globalement." >&2
+        echo "Node.js ${REQUIRED_NODE_MAJOR}.${REQUIRED_NODE_MINOR}+ est requis." >&2
+        echo "Exécute ./install_node.sh pour installer une version locale ou installe Node ${REQUIRED_NODE_MAJOR}.${REQUIRED_NODE_MINOR}+ globalement." >&2
         exit 1
     fi
 
     export PATH="$LOCAL_NODE_DIR_RESOLVED:$PATH"
     NODE_VERSION="$("$LOCAL_NODE_DIR_RESOLVED/node" --version | sed 's/v//')"
     NODE_MAJOR="${NODE_VERSION%%.*}"
-    if (( NODE_MAJOR < 18 )); then
-        echo "La version locale de Node.js est trop ancienne. Réinstalle-la via ./install_node.sh" >&2
+    NODE_MINOR="$(echo "$NODE_VERSION" | cut -d'.' -f2)"
+    if (( NODE_MAJOR < REQUIRED_NODE_MAJOR )) || \
+       (( NODE_MAJOR == REQUIRED_NODE_MAJOR && NODE_MINOR < REQUIRED_NODE_MINOR )); then
+        echo "La version locale de Node.js est trop ancienne ($NODE_VERSION). Réinstalle-la via ./install_node.sh" >&2
         exit 1
     fi
 }
@@ -93,7 +105,9 @@ if command_exists node; then
     NODE_BIN="$(command -v node)"
     NODE_VERSION="$($NODE_BIN --version | sed 's/v//')"
     NODE_MAJOR="${NODE_VERSION%%.*}"
-    if (( NODE_MAJOR < 18 )); then
+    NODE_MINOR="$(echo "$NODE_VERSION" | cut -d'.' -f2)"
+    if (( NODE_MAJOR < REQUIRED_NODE_MAJOR )) || \
+       (( NODE_MAJOR == REQUIRED_NODE_MAJOR && NODE_MINOR < REQUIRED_NODE_MINOR )); then
         echo "Node.js global trop ancien ($NODE_VERSION). Recherche d'une version locale..." >&2
         use_local_node
         USE_LOCAL_NODE=1
@@ -129,7 +143,7 @@ if [[ -z "$NPM_BIN" && -z "$PNPM_BIN" ]]; then
 fi
 
 pushd "$BACKEND_DIR" >/dev/null
-python3 server.py >> "$BACKEND_LOG" 2>&1 &
+"$PYTHON_BIN" server.py >> "$BACKEND_LOG" 2>&1 &
 BACKEND_PID=$!
 popd >/dev/null
 
