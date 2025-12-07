@@ -231,6 +231,18 @@ class VideoProcessor:
         path = Path(tempfile.mkdtemp(prefix='session_', dir=str(self.temp_dir)))
         logger.debug(f"Created work directory {path}")
         return path
+    
+    def _write_concat_manifest(self, clips, manifest_path: Path):
+        """Write a concat manifest with safety checks"""
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(manifest_path, 'w', encoding='utf-8') as handle:
+            handle.write("ffconcat version 1.0\n")
+            for clip in clips:
+                clip_path = Path(clip)
+                if not clip_path.exists():
+                    raise FileNotFoundError(f"Missing clip for concat: {clip_path}")
+                safe_path = str(clip_path.resolve()).replace("'", "'\\''")
+                handle.write(f"file '{safe_path}'\n")
 
     def check_ffmpeg(self):
         """Check if FFmpeg is available"""
@@ -502,13 +514,13 @@ class VideoProcessor:
             logger.info("All clips extracted and converted to vertical format")
             
             # Step 2: Concatenate clips with transitions
+            if len(temp_clips) == 0:
+                raise RuntimeError("Aucun clip à compiler. Vérifie les moments détectés.")
             if len(temp_clips) == 1:
                 os.rename(temp_clips[0], output_path)
             else:
                 concat_file = work_dir / f"concat_{os.getpid()}.txt"
-                with open(concat_file, 'w') as f:
-                    for clip in temp_clips:
-                        f.write(f"file '{clip}'\n")
+                self._write_concat_manifest(temp_clips, concat_file)
                 
                 cmd = [
                     'ffmpeg',
