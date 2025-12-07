@@ -12,6 +12,7 @@ import json
 import uuid
 import logging
 import tempfile
+import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -94,6 +95,33 @@ def cleanup_old_sessions():
             logger.info(f"Cleaned up {len(expired_sessions)} expired sessions")
     except Exception as e:
         logger.error(f"Error in cleanup: {e}")
+
+
+def probe_video_duration(file_path):
+    """Return duration in seconds using ffprobe"""
+    if not file_path or not os.path.exists(file_path):
+        return None
+    try:
+        cmd = [
+            'ffprobe',
+            '-v', 'error',
+            '-show_entries', 'format=duration',
+            '-of', 'default=noprint_wrappers=1:nokey=1',
+            file_path
+        ]
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=15
+        )
+        if result.returncode != 0:
+            return None
+        duration = float(result.stdout.strip())
+        return duration if duration > 0 else None
+    except Exception as exc:
+        logger.warning(f"Unable to probe duration for {file_path}: {exc}")
+        return None
 
 
 @app.route('/health', methods=['GET'])
@@ -199,8 +227,10 @@ def process_videos():
         
         # Download videos and detect moments
         all_moments = []
-        downloaded_files = []
-        subtitle_files = []
+        downloaded_files = [None] * len(videos)
+        subtitle_files = [None] * len(videos)
+        video_durations = [0.0] * len(videos)
+        processed_indexes = []
         
         for idx, video in enumerate(videos):
             try:
@@ -216,8 +246,16 @@ def process_videos():
                     video_id,
                     download_subtitles=include_subtitles
                 )
-                downloaded_files.append(video_path)
-                subtitle_files.append(subtitle_path)
+                downloaded_files[idx] = video_path
+                subtitle_files[idx] = subtitle_path
+                processed_indexes.append(idx)
+                actual_duration = (
+                    probe_video_duration(video_path)
+                    or float(video.get('duration') or 0)
+                )
+                if not actual_duration or actual_duration <= 0:
+                    actual_duration = 30.0
+                video_durations[idx] = actual_duration
                 
                 logger.info(f"Analyzing video for best moments...")
                 
@@ -225,14 +263,14 @@ def process_videos():
                 if auto_detect:
                     moments = moment_detector.detect_moments(
                         video_path,
-                        video['duration'],
+                        video_durations[idx],
                         output_duration // len(videos),
                         video['title']
                     )
                 else:
                     # Simple distribution if auto-detect is off
                     moments = moment_detector.distribute_moments(
-                        video['duration'],
+                        video_durations[idx],
                         output_duration // len(videos),
                         video['title']
                     )
@@ -252,17 +290,50 @@ def process_videos():
         
         # Sort moments by score and select best ones, keeping the strongest clips first
         clip_duration = 4.5
-        target_clip_count = int(output_duration / clip_duration)
+        target_clip_count = max(1, int(output_duration / clip_duration))
         top_moments = sorted(
             all_moments,
             key=lambda x: (-x['score'], x.get('start', 0.0))
         )[:target_clip_count]
+
+        if not top_moments and processed_indexes:
+            logger.warning("No moments detected; generating fallback clips from raw videos.")
+            fallback_count = len(processed_indexes)
+            slice_duration = max(6, int(output_duration / max(1, fallback_count)))
+            fallback_moments = []
+            for idx in processed_indexes:
+                video = videos[idx]
+                video_title = video.get('title', f'Clip {idx + 1}')
+                video_duration = max(video_durations[idx], slice_duration)
+                end_time = min(video_duration, slice_duration)
+                if end_time <= 0:
+                    continue
+                minutes = 0
+                seconds = 0
+                fallback_moments.append({
+                    'start': 0.0,
+                    'end': end_time,
+                    'timestamp': f"{minutes}:{seconds:02d}",
+                    'duration': f"{int(end_time)}s",
+                    'title': f"Extrait principal · {video_title}",
+                    'score': 0.6,
+                    'engagementLevel': 'Medium',
+                    'videoId': video.get('id', ''),
+                    'videoIndex': idx,
+                    'videoTitle': video_title
+                })
+            top_moments = fallback_moments
+        if not top_moments:
+            logger.error("Unable to detect or generate any clips for this session.")
+            session_data['status'] = 'error'
+            return jsonify({'error': 'Impossible de générer un clip automatiquement. Réessaie avec d’autres vidéos.'}), 500
         
         # Update session
         session_data['downloaded_files'] = downloaded_files
         session_data['moments'] = top_moments
         session_data['status'] = 'ready'
         session_data['subtitle_files'] = subtitle_files
+        session_data['video_durations'] = video_durations
         
         logger.info(f"Session {session_id} ready with {len(top_moments)} moments")
         
@@ -321,17 +392,37 @@ def download_video():
         moments = session_data['moments']
         downloaded_files = session_data['downloaded_files']
         subtitle_files = session_data.get('subtitle_files', [])
+        video_durations = session_data.get('video_durations', [])
         
         # Create clips data for compilation
         clips = []
         for moment in moments:
             video_index = moment['videoIndex']
             if video_index < len(downloaded_files):
+                file_path = downloaded_files[video_index]
+                if not file_path:
+                    continue
+                duration_hint = (
+                    video_durations[video_index]
+                    if video_index < len(video_durations)
+                    else None
+                )
+                start = max(0.0, float(moment.get('start', 0.0)))
+                end = max(start + 0.5, float(moment.get('end', start + 0.5)))
+                if duration_hint and duration_hint > 0:
+                    end = min(end, duration_hint)
+                    if end - start < 0.5:
+                        continue
+                subtitle_path = (
+                    subtitle_files[video_index]
+                    if video_index < len(subtitle_files)
+                    else None
+                )
                 clips.append({
-                    'file_path': downloaded_files[video_index],
-                    'start': moment['start'],
-                    'end': moment['end'],
-                    'subtitle_path': subtitle_files[video_index] if video_index < len(subtitle_files) else None
+                    'file_path': file_path,
+                    'start': start,
+                    'end': end,
+                    'subtitle_path': subtitle_path
                 })
         
         # Compile video in TikTok format (9:16)
@@ -360,7 +451,7 @@ def download_video():
             try:
                 # Clean up downloaded files
                 for file_path in downloaded_files:
-                    if os.path.exists(file_path):
+                    if file_path and os.path.exists(file_path):
                         os.remove(file_path)
                 
                 # Clean up subtitle files
@@ -398,7 +489,7 @@ def delete_session(session_id):
         # Clean up files
         for file_path in session_data.get('downloaded_files', []):
             try:
-                if os.path.exists(file_path):
+                if file_path and os.path.exists(file_path):
                     os.remove(file_path)
             except Exception as e:
                 logger.error(f"Error removing file {file_path}: {e}")

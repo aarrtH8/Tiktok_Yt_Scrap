@@ -1,11 +1,90 @@
-import { CheckCircle, Play, Download, Video, Loader } from 'lucide-react';
+import {
+  CheckCircle,
+  Play,
+  Download,
+  Video,
+  Loader,
+  AlertTriangle,
+  Clock,
+} from 'lucide-react';
 import { useState } from 'react';
 
-export default function ProcessingInterface({ progress, moments = [], onDownload }) {
+type ProcessingStage =
+  | 'idle'
+  | 'detect'
+  | 'download'
+  | 'highlights'
+  | 'render'
+  | 'finalize'
+  | 'completed'
+  | 'error';
+
+type ActivityItem = {
+  stage: ProcessingStage;
+  label: string;
+  timestamp: string;
+};
+
+type ProcessingProps = {
+  progress: number;
+  moments?: any[];
+  onDownload?: (quality: string) => Promise<void> | void;
+  stage?: ProcessingStage;
+  activityLog?: ActivityItem[];
+};
+
+const PROCESS_STEPS: Array<{
+  id: ProcessingStage;
+  label: string;
+  description: string;
+}> = [
+  {
+    id: 'detect',
+    label: 'Analyse',
+    description: 'Lecture des liens et récupération des métadonnées.',
+  },
+  {
+    id: 'download',
+    label: 'Téléchargement',
+    description: 'Récupération des fichiers sources en HD.',
+  },
+  {
+    id: 'highlights',
+    label: 'Moments forts',
+    description: 'Détection des séquences avec le plus d’engagement.',
+  },
+  {
+    id: 'render',
+    label: 'Rendu vertical',
+    description: 'Adaptation 9:16, sous-titres et transitions.',
+  },
+  {
+    id: 'finalize',
+    label: 'Assemblage',
+    description: 'Concaténation finale et préparation de l’export.',
+  },
+];
+
+export default function ProcessingInterface({
+  progress,
+  moments = [],
+  onDownload,
+  stage = 'idle',
+  activityLog = [],
+}: ProcessingProps) {
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
   const hasMoments = Array.isArray(moments) && moments.length > 0;
   const showExportOptions = typeof onDownload === 'function';
+  const stageOrder = PROCESS_STEPS.map(step => step.id);
+  const stageIndex =
+    stage === 'completed'
+      ? PROCESS_STEPS.length
+      : Math.max(stageOrder.indexOf(stage), 0);
+  const isErrored = stage === 'error';
+  const currentStep =
+    PROCESS_STEPS.find(step => step.id === stage) ??
+    PROCESS_STEPS[PROCESS_STEPS.length - 1];
 
   const handleDownloadWithProgress = async (quality: string) => {
     setIsDownloading(true);
@@ -39,6 +118,24 @@ export default function ProcessingInterface({ progress, moments = [], onDownload
     }
   };
 
+  const progressValue = isDownloading ? downloadProgress : progress;
+  const progressLabel = isDownloading
+    ? hasMoments
+      ? `Création du master final (${Math.min(
+          Math.ceil((downloadProgress / 100) * moments.length),
+          moments.length
+        )}/${moments.length})`
+      : 'Préparation de la vidéo...'
+    : isErrored
+    ? 'Une erreur est survenue. Consulte les détails et réessaie.'
+    : stage === 'completed'
+    ? 'Compilation terminée, prête à être téléchargée.'
+    : currentStep?.description ?? 'Préparation en cours...';
+
+  const barClassName = isErrored
+    ? 'h-full bg-destructive transition-all duration-300'
+    : 'h-full bg-gradient-to-r from-primary to-accent transition-all duration-300';
+
   return (
     <div className="space-y-6">
       {/* Progress Bar */}
@@ -49,25 +146,86 @@ export default function ProcessingInterface({ progress, moments = [], onDownload
               {isDownloading ? 'Download Progress' : 'Compilation Progress'}
             </h3>
             <span className="text-sm text-muted-foreground">
-              {Math.round(isDownloading ? downloadProgress : progress)}%
+              {Math.round(progressValue)}%
             </span>
           </div>
           <div className="w-full bg-muted rounded-full h-2 overflow-hidden">
             <div
-              className="h-full bg-gradient-to-r from-primary to-accent transition-all duration-300"
-              style={{ width: `${isDownloading ? downloadProgress : progress}%` }}
+              className={barClassName}
+              style={{ width: `${progressValue}%` }}
             />
           </div>
         </div>
-        <p className="text-xs text-muted-foreground">
-          {isDownloading
-            ? hasMoments
-              ? `Adding moment ${Math.min(Math.ceil((downloadProgress / 100) * moments.length), moments.length)} of ${moments.length}...`
-              : 'Preparing your video...'
-            : progress < 100
-            ? 'Analyzing videos and detecting highlights...'
-            : 'Compilation complete!'}
-        </p>
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          {isErrored ? (
+            <AlertTriangle className="w-4 h-4 text-destructive" />
+          ) : (
+            <Loader className="w-4 h-4 animate-spin text-primary/70" />
+          )}
+          <p>{progressLabel}</p>
+        </div>
+      </div>
+
+      {/* Stage overview & activity log */}
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className="bg-card border border-border rounded-xl p-4">
+          <h4 className="text-sm font-semibold mb-3">Pipeline de compilation</h4>
+          <div className="space-y-3">
+            {PROCESS_STEPS.map((step, idx) => {
+              const isComplete = stageIndex > idx;
+              const isCurrent = stageIndex === idx && !isErrored && stage !== 'completed';
+              return (
+                <div
+                  key={step.id}
+                  className="flex items-start gap-3 rounded-lg border border-border/70 p-3 bg-muted/40"
+                >
+                  <div
+                    className={`mt-0.5 flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold ${
+                      isComplete
+                        ? 'bg-primary text-primary-foreground'
+                        : isCurrent
+                        ? 'bg-accent text-accent-foreground'
+                        : 'bg-muted-foreground/20 text-muted-foreground'
+                    }`}
+                  >
+                    {isComplete ? <CheckCircle className="w-4 h-4" /> : idx + 1}
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium">{step.label}</p>
+                    <p className="text-xs text-muted-foreground">{step.description}</p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="bg-card border border-border rounded-xl p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h4 className="text-sm font-semibold">Journal en temps réel</h4>
+            <Clock className="w-4 h-4 text-muted-foreground" />
+          </div>
+          {activityLog.length === 0 ? (
+            <p className="text-xs text-muted-foreground">
+              Les mises à jour en direct apparaîtront ici pendant la compilation.
+            </p>
+          ) : (
+            <ul className="space-y-2 text-sm">
+              {activityLog.map((item, idx) => (
+                <li
+                  key={`${item.stage}-${item.timestamp}-${idx}`}
+                  className="flex items-start justify-between rounded-lg bg-muted/40 px-3 py-2"
+                >
+                  <div>
+                    <p className="font-medium text-foreground">{item.label}</p>
+                    <p className="text-xs text-muted-foreground capitalize">{item.stage}</p>
+                  </div>
+                  <span className="text-xs text-muted-foreground mt-1">{item.timestamp}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
 
       {/* Best Moments List */}

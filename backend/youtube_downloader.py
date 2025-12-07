@@ -115,17 +115,17 @@ class YouTubeDownloader:
 
     def download_video(self, url, session_id, video_id, download_subtitles=True):
         """Download video and optional subtitles. Returns (video_path, subtitle_path)."""
-        try:
-            output_path = self.temp_dir / f"{session_id}_{video_id}.mp4"
+        output_path = self.temp_dir / f"{session_id}_{video_id}.mp4"
 
-            ydl_opts = {
+        def build_opts(enable_subs: bool):
+            return {
                 'format': 'best[ext=mp4][height<=1080]/best[ext=mp4]/best',
                 'outtmpl': str(output_path),
                 'quiet': False,
                 'no_warnings': False,
                 'extract_audio': False,
-                'writesubtitles': download_subtitles,
-                'writeautomaticsub': download_subtitles,
+                'writesubtitles': enable_subs,
+                'writeautomaticsub': enable_subs,
                 'subtitlesformat': 'srt',
                 'subtitleslangs': ['fr', 'en', 'fr.*', 'en.*'],
                 'postprocessors': [{
@@ -134,34 +134,63 @@ class YouTubeDownloader:
                 }],
             }
 
-            logger.info(f"Downloading video {video_id} from {url}")
+        attempt_subtitles = download_subtitles
+        last_error = None
 
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
+        for attempt in range(2 if download_subtitles else 1):
+            try:
+                logger.info(
+                    f"Downloading video {video_id} from {url} "
+                    f"{'(avec sous-titres)' if attempt_subtitles else '(sans sous-titres)'}"
+                )
+                with yt_dlp.YoutubeDL(build_opts(attempt_subtitles)) as ydl:
+                    ydl.download([url])
+                last_error = None
+                break
+            except Exception as exc:
+                last_error = exc
+                error_text = str(exc)
+                subtitle_issue = (
+                    attempt_subtitles
+                    and download_subtitles
+                    and any(
+                        marker in error_text.lower()
+                        for marker in ['subtitle', 'subtitles', 'too many requests', '429']
+                    )
+                )
+                if subtitle_issue:
+                    logger.warning(
+                        f"Subtitle download failed for {video_id} ({exc}). Retrying without subtitles."
+                    )
+                    attempt_subtitles = False
+                    continue
+                logger.error(f"Error downloading video {url}: {exc}")
+                raise
 
-            # yt-dlp might add extension, check for the file
-            if not output_path.exists():
-                # Try with different extensions
-                for ext in ['.mp4', '.mkv', '.webm']:
-                    alt_path = output_path.with_suffix(ext)
-                    if alt_path.exists():
-                        output_path = alt_path
-                        break
+        if last_error:
+            logger.error(f"Failed to download video {url}: {last_error}")
+            raise last_error
 
-            if not output_path.exists():
-                raise FileNotFoundError(f"Downloaded video not found at {output_path}")
+        # yt-dlp might add extension, check for the file
+        if not output_path.exists():
+            for ext in ['.mp4', '.mkv', '.webm']:
+                alt_path = output_path.with_suffix(ext)
+                if alt_path.exists():
+                    output_path = alt_path
+                    break
 
-            subtitle_path = None
-            if download_subtitles:
-                subtitle_path = self._find_subtitle_file(output_path)
-                if subtitle_path:
-                    logger.info(f"Captured subtitles at {subtitle_path}")
-                else:
-                    logger.info("No subtitles available for this video")
+        if not output_path.exists():
+            raise FileNotFoundError(f"Downloaded video not found at {output_path}")
 
-            logger.info(f"Successfully downloaded to {output_path}")
-            return str(output_path), str(subtitle_path) if subtitle_path else None
+        subtitle_path = None
+        if attempt_subtitles:
+            subtitle_path = self._find_subtitle_file(output_path)
+            if subtitle_path:
+                logger.info(f"Captured subtitles at {subtitle_path}")
+            else:
+                logger.info("No subtitles available for this video")
+        else:
+            logger.info("Subtitle download skipped or disabled for this video.")
 
-        except Exception as e:
-            logger.error(f"Error downloading video {url}: {e}")
-            raise
+        logger.info(f"Successfully downloaded to {output_path}")
+        return str(output_path), str(subtitle_path) if subtitle_path else None

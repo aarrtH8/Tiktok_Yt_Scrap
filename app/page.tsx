@@ -1,16 +1,34 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Header from '@/components/header';
 import URLInput from '@/components/url-input';
 import VideoPreview from '@/components/video-preview';
 import CompilationSettings from '@/components/compilation-settings';
 import ProcessingInterface from '@/components/processing-interface';
 
+type ProcessingStage =
+  | 'idle'
+  | 'detect'
+  | 'download'
+  | 'highlights'
+  | 'render'
+  | 'finalize'
+  | 'completed'
+  | 'error';
+
+type ActivityItem = {
+  stage: ProcessingStage;
+  label: string;
+  timestamp: string;
+};
+
 export default function Home() {
   const [videos, setVideos] = useState([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingProgress, setProcessingProgress] = useState(0);
+  const [processingStage, setProcessingStage] = useState<ProcessingStage>('idle');
+  const [activityLog, setActivityLog] = useState<ActivityItem[]>([]);
   const [bestMoments, setBestMoments] = useState([]);
   const [step, setStep] = useState('input'); // input, processing, preview
   const [error, setError] = useState('');
@@ -24,6 +42,50 @@ export default function Home() {
       }
     };
   }, [compiledVideoUrl]);
+
+  const stageMessages: Record<ProcessingStage, string> = useMemo(
+    () => ({
+      detect: 'Analyse des URLs et récupération des métadonnées.',
+      download: 'Téléchargement des vidéos sources en haute qualité.',
+      highlights: 'Détection et notation des meilleurs moments.',
+      render: 'Adaptation au format vertical et ajout des sous-titres.',
+      finalize: 'Assemblage final de la compilation.',
+      completed: 'Compilation terminée, prête pour le téléchargement.',
+      error: 'Une erreur est survenue durant la compilation.',
+      idle: '',
+    }),
+    []
+  );
+
+  useEffect(() => {
+    if (processingStage === 'idle') return;
+    const message = stageMessages[processingStage];
+    if (!message) return;
+
+    setActivityLog(prev => {
+      if (prev.length && prev[prev.length - 1]?.stage === processingStage) {
+        return prev;
+      }
+      const next = [
+        ...prev,
+        {
+          stage: processingStage,
+          label: message,
+          timestamp: new Date().toLocaleTimeString(),
+        },
+      ];
+      return next.slice(-7);
+    });
+  }, [processingStage, stageMessages]);
+
+  const deriveStageFromProgress = (value: number): ProcessingStage => {
+    if (value < 20) return 'detect';
+    if (value < 55) return 'download';
+    if (value < 80) return 'highlights';
+    if (value < 95) return 'render';
+    return 'finalize';
+  };
+
 
   const handleAddVideos = async (urls: string[]) => {
     try {
@@ -57,6 +119,8 @@ export default function Home() {
       setIsProcessing(true);
       setStep('processing');
       setProcessingProgress(0);
+      setActivityLog([]);
+      setProcessingStage('detect');
       if (compiledVideoUrl) {
         URL.revokeObjectURL(compiledVideoUrl);
         setCompiledVideoUrl('');
@@ -64,7 +128,14 @@ export default function Home() {
 
       // Simulate progress
       const progressInterval = setInterval(() => {
-        setProcessingProgress(prev => Math.min(prev + Math.random() * 25, 90));
+        setProcessingProgress(prev => {
+          const nextValue = Math.min(prev + Math.random() * 18, 95);
+          const inferred = deriveStageFromProgress(nextValue);
+          setProcessingStage(prevStage =>
+            prevStage === inferred ? prevStage : inferred
+          );
+          return nextValue;
+        });
       }, 400);
 
       // Call video processing API
@@ -81,9 +152,12 @@ export default function Home() {
         throw new Error('Failed to process videos');
       }
 
+      setProcessingStage('finalize');
+
       const data = await response.json();
       setBestMoments(data.moments);
       setProcessingProgress(100);
+      setProcessingStage('completed');
       setIsProcessing(false);
       setStep('preview');
       setSessionId(data.sessionId); // Store sessionId from process response
@@ -92,6 +166,7 @@ export default function Home() {
       console.error('[v0] Processing error:', err);
       setIsProcessing(false);
       setStep('input');
+      setProcessingStage('error');
     }
   };
 
@@ -336,7 +411,12 @@ export default function Home() {
 
                 {step === 'processing' && (
                   <div className="rounded-xl border border-border bg-background/70 p-4">
-                    <ProcessingInterface progress={processingProgress} moments={bestMoments} />
+                    <ProcessingInterface
+                      progress={processingProgress}
+                      moments={bestMoments}
+                      stage={processingStage}
+                      activityLog={activityLog}
+                    />
                   </div>
                 )}
 
@@ -347,6 +427,8 @@ export default function Home() {
                         progress={100}
                         moments={bestMoments}
                         onDownload={canDownload ? handleDownload : undefined}
+                        stage={processingStage}
+                        activityLog={activityLog}
                       />
                     </div>
                     <div className="rounded-xl border border-border bg-muted/40 p-6">
