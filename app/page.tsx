@@ -1,12 +1,19 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import dynamic from 'next/dynamic';
 import Header from '@/components/header';
 import URLInput from '@/components/url-input';
 import VideoPreview from '@/components/video-preview';
 import CompilationSettings from '@/components/compilation-settings';
 import ProcessingInterface from '@/components/processing-interface';
 import AnimatedBackground from '@/components/animated-background';
+import { motion, AnimatePresence, useScroll, useTransform } from 'framer-motion';
+
+import TimelineEditor from '@/components/timeline-editor';
+
+// Dynamically import the 3D Mascot so it only loads on client
+const HeroMascot = dynamic(() => import('@/components/hero-mascot'), { ssr: false });
 
 type ProcessingStage =
   | 'idle'
@@ -25,16 +32,26 @@ type ActivityItem = {
 };
 
 export default function Home() {
-  const [videos, setVideos] = useState([]);
+  const [videos, setVideos] = useState<any[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingProgress, setProcessingProgress] = useState(0);
   const [processingStage, setProcessingStage] = useState<ProcessingStage>('idle');
   const [activityLog, setActivityLog] = useState<ActivityItem[]>([]);
-  const [bestMoments, setBestMoments] = useState([]);
-  const [step, setStep] = useState('input'); // input, processing, preview
+  const [bestMoments, setBestMoments] = useState<any[]>([]);
+  const [videoDurations, setVideoDurations] = useState<number[]>([]);
+  const [step, setStep] = useState('input'); // input, processing, editor, preview
   const [error, setError] = useState('');
   const [sessionId, setSessionId] = useState(''); // New state to store sessionId
   const [compiledVideoUrl, setCompiledVideoUrl] = useState('');
+  const progressPollRef = useRef<NodeJS.Timeout | null>(null);
+  const [tiktokCaption, setTiktokCaption] = useState('');
+  const [compilationSettings, setCompilationSettings] = useState<any>(null);
+
+  // Parallax Hooks
+  const { scrollYProgress } = useScroll();
+  const yText = useTransform(scrollYProgress, [0, 0.5], [0, 200]);
+  const yMascot = useTransform(scrollYProgress, [0, 0.5], [0, -100]);
+  const opacityHero = useTransform(scrollYProgress, [0, 0.3], [1, 0]);
 
   useEffect(() => {
     return () => {
@@ -57,6 +74,25 @@ export default function Home() {
     }),
     []
   );
+
+  const mapServerStageToProcessing = (stageLabel?: string, status?: string): ProcessingStage => {
+    if (status === 'ready') return 'completed';
+    if (status === 'error') return 'error';
+    const normalized = stageLabel?.toLowerCase() ?? '';
+    if (normalized.includes('téléchargement')) return 'download';
+    if (normalized.includes('analyse')) return 'highlights';
+    if (normalized.includes('prêt')) return 'render';
+    if (normalized.includes('compilation en cours')) return 'finalize';
+    if (normalized.includes('compilation terminée')) return 'completed';
+    if (normalized.includes('initial')) return 'detect';
+    return 'detect';
+  };
+
+  const taskStageMap: Record<string, ProcessingStage> = {
+    download: 'download',
+    analyze: 'highlights',
+    compile: 'finalize',
+  };
 
   useEffect(() => {
     if (processingStage === 'idle') return;
@@ -119,49 +155,35 @@ export default function Home() {
       setError('');
       setIsProcessing(true);
       setStep('processing');
+      setCompilationSettings(settings);
       setProcessingProgress(0);
       setActivityLog([]);
       setProcessingStage('detect');
+      setBestMoments([]);
+      setSessionId('');
+      setTiktokCaption('');
       if (compiledVideoUrl) {
         URL.revokeObjectURL(compiledVideoUrl);
         setCompiledVideoUrl('');
       }
 
-      // Simulate progress
-      const progressInterval = setInterval(() => {
-        setProcessingProgress(prev => {
-          const nextValue = Math.min(prev + Math.random() * 18, 95);
-          const inferred = deriveStageFromProgress(nextValue);
-          setProcessingStage(prevStage =>
-            prevStage === inferred ? prevStage : inferred
-          );
-          return nextValue;
-        });
-      }, 400);
-
-      // Call video processing API
       const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
-      const response = await fetch(`${API_URL}/api/process-video`, {
+      // Use the new analyze endpoint
+      const response = await fetch(`${API_URL}/api/analyze-moments`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ videos, settings }),
       });
 
-      clearInterval(progressInterval);
-
       if (!response.ok) {
-        throw new Error('Failed to process videos');
+        throw new Error('Failed to start analysis');
       }
 
-      setProcessingStage('finalize');
-
       const data = await response.json();
-      setBestMoments(data.moments);
-      setProcessingProgress(100);
-      setProcessingStage('completed');
-      setIsProcessing(false);
-      setStep('preview');
-      setSessionId(data.sessionId); // Store sessionId from process response
+      if (!data?.sessionId) {
+        throw new Error('Session non initialisée');
+      }
+      setSessionId(data.sessionId);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Error processing videos');
       console.error('[v0] Processing error:', err);
@@ -170,6 +192,115 @@ export default function Home() {
       setProcessingStage('error');
     }
   };
+
+  const handleEditorConfirm = async (updatedMoments: any[]) => {
+    try {
+      setIsProcessing(true);
+      setStep('processing');
+      setBestMoments(updatedMoments); // Update local state
+
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+      const response = await fetch(`${API_URL}/api/compile-final`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId,
+          moments: updatedMoments,
+          settings: compilationSettings
+        }),
+      });
+
+      if (!response.ok) throw new Error('Failed to start compilation');
+
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Compilation failed');
+      setStep('editor');
+    }
+  };
+
+  useEffect(() => {
+    if (!sessionId || !isProcessing) {
+      if (progressPollRef.current) {
+        clearInterval(progressPollRef.current);
+        progressPollRef.current = null;
+      }
+      return;
+    }
+
+    const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+    let cancelled = false;
+
+    const fetchProgress = async () => {
+      try {
+        const response = await fetch(`${API_URL}/api/progress/${sessionId}`);
+        if (!response.ok) {
+          throw new Error('Failed to fetch progress');
+        }
+        const data = await response.json();
+        if (cancelled) return;
+
+        if (typeof data.progress === 'number') {
+          setProcessingProgress(data.progress);
+        }
+
+        const nextStage = mapServerStageToProcessing(data.stage, data.status);
+        setProcessingStage(prev => (nextStage ? nextStage : prev));
+
+        if (Array.isArray(data.tasks) && data.tasks.length) {
+          const logEntries = data.tasks
+            .filter((task: any) => task.status !== 'pending')
+            .map((task: any) => ({
+              stage: taskStageMap[task.id] || 'detect',
+              label: `${task.label}${task.detail ? ` · ${task.detail}` : ''}`,
+              timestamp: new Date().toLocaleTimeString(),
+            }));
+          if (logEntries.length) {
+            setActivityLog(logEntries.slice(-7));
+          }
+        }
+
+        if (data.tiktokCaption) {
+          setTiktokCaption(data.tiktokCaption);
+        }
+
+        if (data.status === 'analyzed') {
+          // Analysis complete, switch to editor
+          setBestMoments(data.moments || []);
+          if (data.videoDurations) setVideoDurations(data.videoDurations);
+          setProcessingStage('render'); // use 'render' visual stage for 'Ready to Edit'
+          setStep('editor');
+          setIsProcessing(false); // Stop the spinner loop visual? keep polling?
+          // We need to keep polling if we were waiting, but here we pause.
+          // Actually we stop polling when not isProcessing, so setting isProcessing=false stops it.
+        } else if (data.status === 'ready') {
+          setBestMoments(data.moments || []);
+          setProcessingProgress(100);
+          setProcessingStage('completed');
+          setIsProcessing(false);
+          setStep('preview');
+        } else if (data.status === 'error') {
+          setError(data.error || 'Erreur pendant la compilation.');
+          setProcessingStage('error');
+          setIsProcessing(false);
+          setStep('input');
+        }
+      } catch (err) {
+        if (!cancelled) {
+          console.error('[v0] Progress polling error:', err);
+        }
+      }
+    };
+
+    fetchProgress();
+    const intervalId = setInterval(fetchProgress, 2000);
+    progressPollRef.current = intervalId;
+
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+      progressPollRef.current = null;
+    };
+  }, [sessionId, isProcessing]);
 
   const handleDownload = async (quality: string) => {
     try {
@@ -181,9 +312,9 @@ export default function Home() {
       const response = await fetch(`${API_URL}/api/download-video`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           sessionId: sessionId, // Store sessionId from process response
-          quality 
+          quality
         }),
       });
 
@@ -229,318 +360,233 @@ export default function Home() {
 
   const canDownload = step === 'preview' && Boolean(sessionId);
 
-  const stageDetails: Record<
-    string,
-    { title: string; description: string; helper: string }
-  > = {
-    input: {
-      title: 'Collecte des sources',
-      description: 'Colle les liens YouTube ou TikTok à compiler.',
-      helper: 'Ajoute au moins un lien pour déverrouiller le montage.',
-    },
-    processing: {
-      title: 'Analyse & montage',
-      description: 'Nous extrayons automatiquement les meilleurs moments.',
-      helper: 'La progression est mise à jour en direct.',
-    },
-    preview: {
-      title: 'Prévisualisation & export',
-      description: 'Contrôle les moments retenus puis exporte ta vidéo.',
-      helper: 'Télécharge un export MP4 optimisé pour TikTok.',
-    },
-  };
-
-  const stageOrder = ['input', 'processing', 'preview'];
-  const activeStageIndex = stageOrder.indexOf(step);
-  const statCards = [
-    {
-      label: 'Clips importés',
-      value: videos.length,
-      helper: videos.length ? 'Prêts à être montés' : 'En attente de liens',
-    },
-    {
-      label: 'Étape en cours',
-      value: stageDetails[step]?.title ?? 'Préparation',
-      helper: stageDetails[step]?.description ?? 'Configure ton projet',
-    },
-    {
-      label: 'Session',
-      value: sessionId ? sessionId.slice(0, 6) : 'À créer',
-      helper: sessionId ? 'Session active' : 'Lancera au traitement',
-    },
-  ];
-
   return (
-    <div className="relative min-h-screen overflow-hidden bg-gradient-to-b from-slate-950 via-background to-background text-foreground">
+    <div className="relative min-h-screen overflow-hidden bg-gradient-to-b from-primary/5 via-background to-background text-foreground selection:bg-primary/30">
       <AnimatedBackground />
       <Header />
 
-      <main className="mx-auto w-full max-w-6xl px-4 pb-16 pt-10 sm:pt-16">
-        {error && (
-          <div className="mx-auto mb-6 max-w-4xl rounded-3xl border border-destructive/40 bg-destructive/15 p-4 text-sm text-destructive shadow-lg shadow-destructive/20 backdrop-blur">
-            {error}
+      <main className="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8 pb-20 pt-16">
+
+        {/* HERO SECTION WITH PARALLAX & MASCOT */}
+        <div className="relative min-h-[500px] flex items-center justify-center mb-16">
+          <div className="grid lg:grid-cols-2 gap-8 items-center w-full">
+
+            {/* LEFT: Text Content with Parallax */}
+            <motion.div
+              style={{ y: yText, opacity: opacityHero }}
+              className="text-left space-y-6 z-10"
+            >
+              <div className="inline-block px-4 py-1.5 rounded-full bg-accent/10 border border-accent/20 backdrop-blur-md mb-2">
+                <span className="text-xs font-semibold text-primary tracking-wider uppercase">✨ AI Video Studio 2.0</span>
+              </div>
+              <h1 className="text-5xl md:text-7xl font-bold tracking-tight text-foreground leading-tight">
+                Viral Shorts <br />
+                <span className="text-transparent bg-clip-text bg-gradient-to-r from-primary via-purple-400 to-pink-600">
+                  On Autopilot
+                </span>
+              </h1>
+              <p className="text-lg text-muted-foreground max-w-xl leading-relaxed">
+                Transform long videos into engaging TikToks, Reels & Shorts instantly.
+                Featuring <span className="text-foreground font-medium">Auto-Framing</span>, <span className="text-foreground font-medium">Smart Captions</span>, and <span className="text-foreground font-medium">Viral Hooks</span>.
+              </p>
+              <div className="flex gap-4 pt-4">
+                <button onClick={() => window.scrollTo({ top: 600, behavior: 'smooth' })} className="px-8 py-4 bg-primary text-primary-foreground font-bold rounded-xl hover:scale-105 transition-transform shadow-lg shadow-primary/25">
+                  Start Creating
+                </button>
+                <button className="px-8 py-4 bg-card border border-border text-foreground font-semibold rounded-xl hover:bg-accent hover:text-accent-foreground transition-colors">
+                  View Demo
+                </button>
+              </div>
+            </motion.div>
+
+            {/* RIGHT: 3D Mascot with Parallax */}
+            <motion.div
+              style={{ y: yMascot, opacity: opacityHero }}
+              className="relative h-[400px] lg:h-[500px] w-full flex items-center justify-center z-0"
+            >
+              <div className="absolute inset-0 bg-gradient-to-tr from-primary/20 via-purple-500/10 to-transparent blur-[100px] rounded-full opacity-50 pointer-events-none" />
+              <HeroMascot />
+            </motion.div>
           </div>
+        </div>
+
+        {error && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mx-auto mb-8 max-w-3xl rounded-2xl border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive font-medium text-center"
+          >
+            {error}
+          </motion.div>
         )}
 
-        <section className="space-y-10">
-          <div className="glass-panel shine-border relative overflow-hidden rounded-[32px] border border-white/10 p-8 shadow-2xl">
-            <div className="absolute inset-x-0 top-0 h-32 bg-gradient-to-br from-primary/30 via-transparent to-transparent opacity-60 blur-3xl" />
+        {/* WORKSPACE GRID */}
+        <div className="grid lg:grid-cols-[1.5fr,1fr] gap-8 items-start max-w-6xl mx-auto">
 
-            <div className="grid gap-10 lg:grid-cols-[1.6fr,1fr]">
-              <div className="space-y-6">
-                <div className="flex flex-wrap items-center gap-3 text-xs font-semibold uppercase tracking-[0.3em] text-muted-foreground">
-                  <span className="rounded-full border border-white/20 px-3 py-1 text-[10px] text-white/80">
-                    Studio IA
-                  </span>
-                  <span className="flex items-center gap-2 rounded-full border border-emerald-400/30 px-3 py-1 text-[10px] text-emerald-300">
-                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
-                    Monitoring en direct
-                  </span>
-                </div>
-                <div className="space-y-4">
-                  <h1 className="text-3xl font-semibold leading-tight text-white sm:text-4xl">
-                    Automatise ta compilation courte avec une{' '}
-                    <span className="text-transparent bg-gradient-to-r from-sky-300 via-primary-foreground/90 to-fuchsia-300 bg-clip-text">
-                      expérience ultra fluide
-                    </span>
-                    .
-                  </h1>
-                  <p className="text-base text-white/70">
-                    Colle tes URLs, règle la durée et laisse l’IA détecter les moments forts, incruster
-                    les sous-titres et exporter un master 9:16 prêt pour TikTok, Reels et Shorts.
-                  </p>
-                </div>
-                <div className="flex flex-wrap gap-2 text-xs text-white/80">
-                  {['Gestion multi-clips', 'Sous-titres optionnels', 'Templates verticales'].map(label => (
-                    <span
-                      key={label}
-                      className="rounded-full border border-white/15 px-3 py-1 backdrop-blur"
-                    >
-                      {label}
-                    </span>
-                  ))}
-                </div>
-
-                <div className="grid gap-3 sm:grid-cols-3">
-                  {statCards.map(card => (
-                    <div
-                      key={card.label}
-                      className="relative overflow-hidden rounded-2xl border border-white/10 bg-white/5 p-4 text-white/80 shadow-lg shadow-primary/5 transition hover:-translate-y-1 hover:border-primary/40"
-                    >
-                      <p className="text-[11px] uppercase tracking-wide text-white/60">{card.label}</p>
-                      <p className="mt-2 text-2xl font-semibold text-white">{card.value || '0'}</p>
-                      <p className="text-xs text-white/70">{card.helper}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="glass-panel relative rounded-[28px] border border-white/10 p-6 shadow-2xl">
-                <div className="flex items-center justify-between">
-                  <p className="text-xs font-semibold uppercase tracking-[0.4em] text-white/60">
-                    Pipeline
-                  </p>
-                  <div className="flex items-center gap-2 rounded-full bg-emerald-500/10 px-3 py-1 text-xs text-emerald-300">
-                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
-                    {processingStage === 'completed' ? 'Prêt à exporter' : 'Actif'}
-                  </div>
-                </div>
-                <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-4">
-                  <p className="text-sm font-medium text-white">{stageDetails[step]?.title}</p>
-                  <p className="text-xs text-white/70">{stageDetails[step]?.description}</p>
-                  <div className="mt-4 h-2 w-full overflow-hidden rounded-full bg-white/10">
-                    <div
-                      className="h-full rounded-full bg-gradient-to-r from-primary via-sky-300 to-fuchsia-400 transition-all"
-                      style={{ width: `${Math.max(12, processingProgress)}%` }}
-                    />
-                  </div>
-                </div>
-                <div className="mt-6 space-y-4">
-                  {activityLog.length > 0 ? (
-                    activityLog.map(item => (
-                      <div
-                        key={`${item.stage}-${item.timestamp}`}
-                        className="flex items-center justify-between rounded-2xl border border-white/5 bg-white/5 px-3 py-2 text-xs text-white/70"
-                      >
-                        <span>{item.label}</span>
-                        <span className="text-white/50">{item.timestamp}</span>
-                      </div>
-                    ))
-                  ) : (
-                    <p className="text-xs text-white/60">
-                      Les étapes en cours s’afficheront ici dès que la compilation sera lancée.
-                    </p>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="grid gap-4 md:grid-cols-3">
-            {stageOrder.map((stageKey, index) => {
-              const isActive = step === stageKey;
-              const isComplete = index < activeStageIndex;
-              const stage = stageDetails[stageKey];
-
-              return (
-                <div
-                  key={stageKey}
-                  className={`relative overflow-hidden rounded-3xl border p-5 transition ${
-                    isActive
-                      ? 'border-primary/40 bg-white/10 shadow-xl shadow-primary/20'
-                      : 'border-white/10 bg-white/5'
-                  }`}
-                >
-                  <div className="flex items-center justify-between text-[11px] uppercase tracking-[0.4em] text-white/50">
-                    <span>Étape {index + 1}</span>
-                    <span
-                      className={`rounded-full px-2 py-0.5 text-[10px] ${
-                        isComplete
-                          ? 'bg-emerald-500/15 text-emerald-200'
-                          : isActive
-                            ? 'bg-primary/20 text-primary-foreground/80'
-                            : 'bg-white/10 text-white/60'
-                      }`}
-                    >
-                      {isComplete ? 'Terminé' : isActive ? 'En cours' : 'À venir'}
-                    </span>
-                  </div>
-                  <p className="mt-4 text-lg font-semibold text-white">{stage.title}</p>
-                  <p className="text-sm text-white/70">{stage.description}</p>
-                  <p className="mt-2 text-xs text-white/50">{stage.helper}</p>
-                </div>
-              );
-            })}
-          </div>
-        </section>
-
-        <section className="mt-12 grid gap-8 lg:grid-cols-[1.8fr,1fr]">
+          {/* LEFT COLUMN: Input & Preview */}
           <div className="space-y-6">
-            <div className="glass-panel rounded-[28px] border border-white/10 p-6 shadow-2xl">
-              <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/5 pb-5">
-                <div>
-                  <p className="text-xs uppercase tracking-[0.4em] text-white/50">Workspace</p>
-                  <h2 className="text-2xl font-semibold text-white">{stageDetails[step]?.title}</h2>
-                  <p className="text-sm text-white/70">{stageDetails[step]?.helper}</p>
-                </div>
-                <div className="rounded-full border border-white/10 px-4 py-2 text-sm text-white/70">
-                  {videos.length} clip{videos.length > 1 ? 's' : ''} importé
-                  {videos.length > 1 ? 's' : ''}
-                </div>
-              </div>
+            <div className="glass-panel rounded-[32px] border border-border bg-card/40 p-1 shadow-2xl backdrop-blur-xl">
+              <div className="bg-card w-full rounded-[28px] p-6 min-h-[400px] border border-border/50">
 
-              <div className="pt-6">
                 {step === 'input' && (
-                  <div className="space-y-6">
-                    <URLInput onAddVideos={handleAddVideos} />
-                    <div className="rounded-xl border border-dashed border-border/70 bg-muted/30 p-4 text-sm text-muted-foreground">
-                      Ajoute des liens YouTube (un par ligne) puis clique sur
-                      &laquo;&nbsp;Ajouter les vidéos&nbsp;&raquo;. Tu peux vérifier chaque clip
-                      dans la liste avant de lancer le montage.
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="space-y-8"
+                  >
+                    <div className="text-center space-y-2 mb-8">
+                      <h2 className="text-xl font-semibold text-foreground">Import Videos</h2>
+                      <p className="text-sm text-muted-foreground">Drop YouTube links to start magic</p>
                     </div>
+
+                    <URLInput onAddVideos={handleAddVideos} />
+
                     {videos.length > 0 && (
-                      <VideoPreview videos={videos} onRemoveVideo={handleRemoveVideo} />
+                      <div className="mt-8">
+                        <div className="flex items-center justify-between mb-4 px-2">
+                          <div className="text-sm font-medium text-muted-foreground">Queue ({videos.length})</div>
+                        </div>
+                        <VideoPreview videos={videos} onRemoveVideo={handleRemoveVideo} />
+                      </div>
                     )}
-                  </div>
+                  </motion.div>
                 )}
 
                 {step === 'processing' && (
-                  <div className="rounded-xl border border-border bg-background/70 p-4">
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="h-full flex flex-col justify-center"
+                  >
                     <ProcessingInterface
                       progress={processingProgress}
                       moments={bestMoments}
                       stage={processingStage}
                       activityLog={activityLog}
                     />
-                  </div>
+                  </motion.div>
+                )}
+
+                {step === 'editor' && (
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="h-full flex flex-col justify-start"
+                  >
+                    <TimelineEditor
+                      initialMoments={bestMoments}
+                      videoDurations={videoDurations}
+                      onConfirm={handleEditorConfirm}
+                      onCancel={() => setStep('input')}
+                      downloadedFiles={[]} // We rely on moment.filename or moment.file_path actually
+                    />
+                  </motion.div>
                 )}
 
                 {step === 'preview' && (
-                  <div className="space-y-6">
-                    <div className="rounded-xl border border-border bg-background/60 p-4">
-                      <ProcessingInterface
-                        progress={100}
-                        moments={bestMoments}
-                        onDownload={canDownload ? handleDownload : undefined}
-                        stage={processingStage}
-                        activityLog={activityLog}
-                      />
-                    </div>
-                    <div className="rounded-xl border border-border bg-muted/40 p-6">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          <h3 className="text-lg font-semibold">Résultat final</h3>
-                          <p className="text-sm text-muted-foreground">
-                            Prévisualise la compilation avant téléchargement.
-                          </p>
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="space-y-6"
+                  >
+                    <div className="rounded-2xl overflow-hidden shadow-2xl ring-1 ring-border flex justify-center bg-black/5 py-4 dark:bg-black/40">
+                      {compiledVideoUrl ? (
+                        <video controls className="h-[500px] w-auto bg-black aspect-[9/16] rounded-lg shadow-lg">
+                          <source src={compiledVideoUrl} type="video/mp4" />
+                        </video>
+                      ) : (
+                        <div className="h-[500px] w-full aspect-[9/16] flex items-center justify-center bg-muted text-muted-foreground">
+                          Preparing preview...
                         </div>
-                        {canDownload && (
-                          <span className="text-xs font-medium uppercase tracking-wide text-primary">
-                            Session prête · {sessionId.slice(0, 6)}
-                          </span>
-                        )}
-                      </div>
-                      <div className="mt-4 rounded-xl border border-border bg-black/80 p-2">
-                        {compiledVideoUrl ? (
-                          <video
-                            key={compiledVideoUrl}
-                            controls
-                            className="w-full rounded-lg border border-border bg-black"
-                          >
-                            <source src={compiledVideoUrl} type="video/mp4" />
-                            Votre navigateur ne supporte pas la lecture vidéo.
-                          </video>
-                        ) : (
-                          <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border/60 bg-background/60 px-6 py-16 text-center">
-                            <p className="text-sm text-muted-foreground">
-                              {canDownload
-                                ? 'Clique sur “Download Video” pour générer la prévisualisation.'
-                                : 'La prévisualisation apparaîtra juste après la compilation.'}
-                            </p>
-                            {!canDownload && (
-                              <p className="mt-2 text-xs text-muted-foreground/80">
-                                Assure-toi que la compilation est terminée puis relance le
-                                téléchargement.
-                              </p>
-                            )}
-                          </div>
-                        )}
-                      </div>
+                      )}
                     </div>
-                  </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <button
+                        onClick={() => {
+                          setStep('input');
+                          setVideos([]);
+                          setSessionId('');
+                          setCompiledVideoUrl('');
+                          setProcessingProgress(0);
+                          setProcessingStage('idle');
+                        }}
+                        className="p-4 rounded-xl bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-all font-medium text-sm"
+                      >
+                        New Compilation
+                      </button>
+
+                      {canDownload && (
+                        <motion.button
+                          whileHover={{ scale: 1.05 }}
+                          whileTap={{ scale: 0.95 }}
+                          onClick={() => handleDownload('1080p')}
+                          className="p-4 rounded-xl bg-primary text-primary-foreground font-bold transition-all text-sm shadow-lg shadow-primary/20 flex items-center justify-center gap-2"
+                        >
+                          <span>Download Video</span>
+                          <span className="text-xl">⬇️</span>
+                        </motion.button>
+                      )}
+                    </div>
+                  </motion.div>
                 )}
+
+              </div>
+            </div>
+
+            {/* Caption Section */}
+            <AnimatePresence>
+              {tiktokCaption && (
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="glass-panel rounded-[24px] border border-border p-6 space-y-4 bg-card/80 backdrop-blur-md"
+                >
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-semibold text-foreground">Generated Caption</h3>
+                    <button
+                      onClick={() => navigator.clipboard?.writeText(tiktokCaption)}
+                      className="text-xs font-mono bg-primary/20 text-primary px-3 py-1 rounded-full hover:bg-primary/30 transition-colors"
+                    >
+                      COPY
+                    </button>
+                  </div>
+                  <div className="p-4 rounded-xl bg-muted border border-border">
+                    <pre className="whitespace-pre-wrap font-sans text-sm text-foreground/80 leading-relaxed">
+                      {tiktokCaption}
+                    </pre>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+
+          {/* RIGHT COLUMN: Settings */}
+          <div className="lg:sticky lg:top-8 space-y-6">
+            <CompilationSettings
+              onGenerate={handleGenerate}
+              videosCount={videos.length}
+              isProcessing={isProcessing}
+            />
+
+            {/* Pro Tip Card */}
+            <div className="glass-panel p-6 rounded-3xl border border-white/5 bg-gradient-to-br from-primary/5 to-transparent">
+              <div className="flex gap-4">
+                <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary text-lg">
+                  💡
+                </div>
+                <div>
+                  <h4 className="font-semibold text-white mb-1">Pro Tip</h4>
+                  <p className="text-sm text-white/60 leading-relaxed">
+                    For best results, use videos with clear speech. AI will auto-sync captions to the spoken audio.
+                  </p>
+                </div>
               </div>
             </div>
           </div>
 
-          <div className="space-y-6">
-            <div className="glass-panel rounded-[28px] border border-white/10 p-6 shadow-2xl">
-              <div className="mb-6">
-                <p className="text-xs uppercase tracking-[0.4em] text-white/60">
-                  Paramètres du rendu
-                </p>
-                <h2 className="text-xl font-semibold text-white">Compilation & export</h2>
-                <p className="text-sm text-white/70">
-                  Personnalise la durée, le format et l&rsquo;ajout éventuel de sous-titres avant de
-                  lancer le montage automatique.
-                </p>
-              </div>
-              <CompilationSettings
-                onGenerate={handleGenerate}
-                videosCount={videos.length}
-                isProcessing={isProcessing}
-              />
-            </div>
-            <div className="glass-panel rounded-2xl border border-white/10 bg-gradient-to-br from-primary/10 via-white/5 to-transparent p-5 text-sm text-white/80 shadow-lg shadow-primary/10">
-              <p className="text-xs uppercase tracking-[0.4em] text-white/60">Pro tip</p>
-              <p className="mt-2 text-white/80">
-                Ajoute tes meilleurs mots-clés dans le titre final pour booster les vues une fois la
-                vidéo exportée. Nous gardons la session ouverte pendant 30 minutes pour permettre
-                plusieurs téléchargements.
-              </p>
-            </div>
-          </div>
-        </section>
+        </div>
+
       </main>
     </div>
   );

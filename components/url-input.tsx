@@ -1,20 +1,25 @@
 'use client';
 
 import { useState } from 'react';
-import { Upload, Plus } from 'lucide-react';
+import { Plus, Youtube, Link as LinkIcon, ArrowRight } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 
-export default function URLInput({ onAddVideos }) {
+interface URLInputProps {
+  onAddVideos: (urls: string[]) => void;
+}
+
+export default function URLInput({ onAddVideos }: URLInputProps) {
   const [input, setInput] = useState('');
-  const [dragActive, setDragActive] = useState(false);
+  const [isFocused, setIsFocused] = useState(false);
 
-  const handleSubmit = (e) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (input.trim()) {
       const urls = input
         .split('\n')
         .map(url => url.trim())
         .filter(url => url.length > 0);
-      
+
       if (urls.length > 0) {
         onAddVideos(urls);
         setInput('');
@@ -22,63 +27,50 @@ export default function URLInput({ onAddVideos }) {
     }
   };
 
-  const handleDrag = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragActive(e.type === 'dragenter' || e.type === 'dragover');
-  };
-
-  const handleDrop = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragActive(false);
-
-    const text = e.dataTransfer.getData('text/plain');
-    if (text) {
-      setInput(prev => prev ? prev + '\n' + text : text);
-    }
-  };
-
   return (
-    <div className="bg-card border border-border rounded-xl overflow-hidden">
-      <div className="p-6 bg-gradient-to-br from-primary/5 to-accent/5">
-        <h2 className="text-xl font-semibold mb-4">Add YouTube Videos</h2>
-        
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div
-            onDragEnter={handleDrag}
-            onDragLeave={handleDrag}
-            onDragOver={handleDrag}
-            onDrop={handleDrop}
-            className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors cursor-pointer ${
-              dragActive 
-                ? 'border-primary bg-primary/5' 
-                : 'border-border hover:border-primary/50'
-            }`}
-          >
-            <Upload className="w-8 h-8 mx-auto mb-3 text-muted-foreground" />
-            <p className="text-sm font-medium mb-1">Paste YouTube URLs</p>
-            <p className="text-xs text-muted-foreground">One URL per line</p>
+    <div className="w-full max-w-2xl mx-auto">
+      <form onSubmit={handleSubmit} className="relative group">
+        <div className={`
+          relative flex items-center gap-3 p-2 bg-card border rounded-2xl transition-all duration-300
+          ${isFocused ? 'border-primary/50 shadow-[0_0_30px_-5px_var(--primary)] bg-accent/5' : 'border-border hover:border-primary/30'}
+        `}>
+          <div className="pl-4">
+            <LinkIcon className={`w-5 h-5 transition-colors ${isFocused ? 'text-primary' : 'text-muted-foreground'}`} />
           </div>
 
-          <textarea
+          <input
+            type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="https://youtube.com/watch?v=...&#10;https://youtube.com/watch?v=..."
-            className="w-full px-4 py-3 bg-background border border-border rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-primary text-sm"
-            rows={4}
+            onFocus={() => setIsFocused(true)}
+            onBlur={() => setIsFocused(false)}
+            placeholder="Entrez vos liens YouTube ici..."
+            className="flex-1 bg-transparent border-none outline-none text-foreground placeholder-muted-foreground text-lg py-3"
           />
 
           <button
             type="submit"
             disabled={!input.trim()}
-            className="w-full bg-gradient-to-r from-primary to-accent hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed text-primary-foreground font-medium py-2.5 rounded-lg transition-all flex items-center justify-center gap-2"
+            className="p-3 rounded-xl bg-primary text-primary-foreground font-semibold hover:opacity-90 disabled:opacity-0 disabled:scale-95 transition-all duration-300"
           >
-            <Plus className="w-4 h-4" />
-            Add Videos
+            <ArrowRight className="w-5 h-5" />
           </button>
-        </form>
-      </div>
+        </div>
+
+        {/* Helper text with fade in */}
+        <AnimatePresence>
+          {isFocused && (
+            <motion.p
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="absolute -bottom-8 left-4 text-xs text-muted-foreground"
+            >
+              Appuyez sur Entrée pour ajouter
+            </motion.p>
+          )}
+        </AnimatePresence>
+      </form>
     </div>
   );
 }
