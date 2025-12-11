@@ -18,6 +18,7 @@ interface Moment {
     videoTitle: string;
     filename?: string;
     file_path?: string;
+    id: string; // Unique UUID
 }
 
 interface TimelineEditorProps {
@@ -106,10 +107,12 @@ export default function TimelineEditor({
             const startTime = Number(activeMoment.start);
             if (Number.isFinite(startTime) && startTime >= 0) {
                 videoRef.current.currentTime = startTime;
+            } else {
+                videoRef.current.currentTime = 0;
             }
             if (isPlaying) videoRef.current.play().catch(() => { });
         }
-    }, [activeSrc, activeMoment?.start]);
+    }, [activeSrc, activeMoment?.id]); // Use ID for deep equality check
 
     const togglePlay = () => {
         if (videoRef.current) {
@@ -121,12 +124,16 @@ export default function TimelineEditor({
 
     const handleTimeUpdate = () => {
         if (videoRef.current && activeMoment) {
-            // Loop clip
-            if (videoRef.current.currentTime >= activeMoment.end) {
-                videoRef.current.currentTime = activeMoment.start;
-                // Optional: Move to next clip?
-                // videoRef.current.pause();
-                // setIsPlaying(false);
+            const current = videoRef.current.currentTime;
+            const end = Number(activeMoment.end);
+            const start = Number(activeMoment.start);
+
+            // Loop clip if finite
+            if (Number.isFinite(end) && Number.isFinite(start)) {
+                if (current >= end || current < start) {
+                    videoRef.current.currentTime = start;
+                    // Optional: Autoplay next? For now strict loop
+                }
             }
         }
     };
@@ -144,14 +151,19 @@ export default function TimelineEditor({
 
     const handleUpdateDuration = (index: number, newRange: [number, number]) => {
         const newMoments = [...moments];
-        newMoments[index] = {
-            ...newMoments[index],
-            start: newRange[0],
-            end: newRange[1],
-            duration: `${Math.round(newRange[1] - newRange[0])}s`,
-            timestamp: formatTime(newRange[0])
-        };
-        setMoments(newMoments);
+        const start = Number(newRange[0]);
+        const end = Number(newRange[1]);
+
+        if (Number.isFinite(start) && Number.isFinite(end)) {
+            newMoments[index] = {
+                ...newMoments[index],
+                start: start,
+                end: end,
+                duration: `${Math.round(end - start)}s`,
+                timestamp: formatTime(start)
+            };
+            setMoments(newMoments);
+        }
     };
 
 
@@ -162,24 +174,35 @@ export default function TimelineEditor({
             <div className="flex-1 min-h-[400px] flex">
 
                 {/* Left: Main Player */}
-                <div className="flex-1 relative bg-black flex items-center justify-center group">
+                <div className="flex-1 relative bg-black flex items-center justify-center group overflow-hidden">
                     {activeMoment && activeSrc ? (
-                        <video
-                            ref={videoRef}
-                            src={activeSrc}
-                            className="max-h-full max-w-full aspect-video object-contain"
-                            onTimeUpdate={handleTimeUpdate}
-                            onClick={togglePlay}
-                        />
+                        <>
+                            <video
+                                ref={videoRef}
+                                src={activeSrc}
+                                className="max-h-full max-w-full aspect-video object-contain"
+                                onTimeUpdate={handleTimeUpdate}
+                                onClick={togglePlay}
+                            />
+
+                            {/* 9:16 Safe Area Overlay */}
+                            <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+                                <div className="h-full aspect-[9/16] border-2 border-white/20 shadow-[0_0_0_9999px_rgba(0,0,0,0.7)] relative">
+                                    <div className="absolute top-2 left-1/2 -translate-x-1/2 px-2 py-0.5 bg-black/50 text-[8px] text-white/50 rounded-full">
+                                        9:16 Crop
+                                    </div>
+                                </div>
+                            </div>
+                        </>
                     ) : (
                         <div className="text-white/20 font-mono text-sm">Select a clip to preview</div>
                     )}
 
                     {/* Player Controls Overlay */}
-                    <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                    <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
                         <button
                             onClick={togglePlay}
-                            className="p-4 bg-white/10 backdrop-blur-md rounded-full pointer-events-auto hover:scale-110 transition-transform"
+                            className="p-4 bg-white/10 backdrop-blur-md rounded-full pointer-events-auto hover:scale-110 transition-transform shadow-xl"
                         >
                             {isPlaying ? <Pause className="w-8 h-8 fill-current" /> : <Play className="w-8 h-8 fill-current ml-1" />}
                         </button>
@@ -187,7 +210,7 @@ export default function TimelineEditor({
 
                     {/* Top Overlay Info */}
                     {activeMoment && (
-                        <div className="absolute top-4 left-4 bg-black/60 backdrop-blur text-xs px-3 py-1.5 rounded-md border border-white/10">
+                        <div className="absolute top-4 left-4 bg-black/60 backdrop-blur text-xs px-3 py-1.5 rounded-md border border-white/10 z-20">
                             <span className="text-primary font-bold">{activeMoment.duration}</span> • {activeMoment.videoTitle}
                         </div>
                     )}
@@ -210,7 +233,7 @@ export default function TimelineEditor({
                                             <Scissors className="w-3 h-3" /> Trim Range
                                         </label>
                                         <span className="font-mono text-xs text-primary">
-                                            {(activeMoment.end - activeMoment.start).toFixed(1)}s
+                                            {(Number(activeMoment.end) - Number(activeMoment.start) || 0).toFixed(1)}s
                                         </span>
                                     </div>
 
@@ -283,7 +306,7 @@ export default function TimelineEditor({
                     <Reorder.Group axis="x" values={moments} onReorder={setMoments} className="flex gap-2 h-full min-w-max">
                         {moments.map((moment, index) => (
                             <TimelineItem
-                                key={`${moment.videoId}-${index}-${moment.start}`}
+                                key={moment.id} // Stable UUID key
                                 moment={moment}
                                 isActive={index === activeClipIndex}
                                 index={index}
@@ -321,7 +344,7 @@ function TimelineItem({ moment, isActive, index, onClick }: { moment: Moment, is
                 {/* Content */}
                 <div className="h-full p-2 flex flex-col justify-end bg-gradient-to-t from-black/80 to-transparent">
                     <span className="text-[10px] font-bold text-white/90 truncate">{moment.title}</span>
-                    <span className="text-[8px] text-primary tabular-nums">{(moment.end - moment.start).toFixed(1)}s</span>
+                    <span className="text-[8px] text-primary tabular-nums">{(Number(moment.end) - Number(moment.start) || 0).toFixed(1)}s</span>
                 </div>
 
                 {/* Drag Handle Overlay */}
