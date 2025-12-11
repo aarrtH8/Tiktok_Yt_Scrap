@@ -165,7 +165,10 @@ class VideoProcessor:
         try:
             import cv2
         except ImportError:
-            logger.warning("OpenCV not installed; falling back to center crop")
+            logger.warning("OpenCV (cv2) not installed; falling back to center crop")
+            return 0.5
+        except Exception as e:
+            logger.warning(f"Error importing cv2: {e}; falling back to center crop")
             return 0.5
 
         cap = cv2.VideoCapture(video_path)
@@ -289,97 +292,130 @@ class VideoProcessor:
             logger.error(f"Error extracting clip: {e}")
             raise
     
-    def convert_to_vertical(self, input_path, output_path, quality='720p', subtitle_path=None):
+    def convert_to_vertical(self, input_path, output_path, quality='720p', subtitle_path=None, layout='crop', header_text=None):
         """
         Convert video to vertical TikTok format (9:16)
-        Applies smart cropping to focus on center/action and optionally burns subtitles
+        Modes:
+          - 'crop': Smart focus crop (active pan/scan).
+          - 'fit': Fit width, blurred background padding (repost style).
         """
         try:
             # Determine output resolution based on quality
             if quality == '1080p':
                 width, height = 1080, 1920
                 bitrate = '5000k'
+                fontsize = 80
             elif quality == '720p':
                 width, height = 720, 1280
                 bitrate = '2500k'
+                fontsize = 60
             else:  # 480p
                 width, height = 480, 854
                 bitrate = '1500k'
+                fontsize = 40
 
             subtitle_filter = ""
             if subtitle_path and Path(subtitle_path).exists():
                 escaped = str(Path(subtitle_path)).replace("'", "\\'")
+                # Adjusted margins for 'fit' mode to avoid overlapping with video if needed, 
+                # but standard margins usually work fine.
                 style = (
                     "Fontname=Montserrat,Fontsize=26,PrimaryColour=&H00FFFFFF&,BackColour=&H60000000&,"
-                    "Outline=1,Shadow=1,MarginV=40,MarginL=36,MarginR=36"
+                    "Outline=1,Shadow=1,MarginV=50,MarginL=36,MarginR=36"
                 )
                 subtitle_filter = f",subtitles='{escaped}':force_style='{style}'"
-            
-            # Use crop and scale filters for vertical format
-            # Smart cropping tries to keep the most active area visible
+
+            # Header Text Filter
+            text_filter = ""
+            if header_text:
+                # Sanitize text for ffmpeg drawtext
+                safe_text = header_text.replace("'", "").replace(":", "\\:")
+                # White text with black border, centered at top
+                text_filter = (
+                    f",drawtext=text='{safe_text}':fontcolor=white:fontsize={fontsize}:"
+                    f"x=(w-text_w)/2:y={fontsize}:borderw=4:bordercolor=black"
+                )
+
             metadata = self._get_video_resolution(input_path)
             src_width = metadata.get('width')
             src_height = metadata.get('height')
-            target_aspect = width / height if height else (9 / 16)
+            
             filter_complex = None
-            focus_center = 0.5
-            smart_crop_applied = False
 
-            if src_width and src_height:
-                src_aspect = src_width / src_height if src_height else target_aspect
-                if src_aspect > target_aspect + 0.02:
-                    # Wide video – build a parallax effect with a blurred background and a tightened foreground crop
-                    focus_center = self._estimate_focus_center(input_path)
+            if layout == 'fit' and src_width and src_height:
+                # FIT & BLUR MODE
+                # 1. Background: Scale to cover 9:16, Blur, Darken
+                # 2. Foreground: Scale to fit width (keeping aspect), Center vertically
+                
+                # Calculate foreground scaling
+                target_ratio = width / height
+                src_ratio = src_width / src_height
+                
+                # If video is wider than target (usual case for YT), we fit by width
+                # If video is taller (already vertical), we might crop or fit height, but 'fit' usually implies showing full content.
+                # Simplest 'fit' logic: scale until one dimension matches, usually width.
+                
+                bg_chain = (
+                    f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase,"
+                    f"crop={width}:{height},"
+                    f"gblur=sigma=30,eq=brightness=-0.3[bg]"
+                )
+                
+                # Foreground: scale to width, maintain aspect ratio
+                fg_chain = (
+                    f"[0:v]scale={width}:-1[fg]"
+                )
+                
+                filter_complex = (
+                    f"{bg_chain};{fg_chain};"
+                    f"[bg][fg]overlay=0:(H-h)/2"
+                    f"{subtitle_filter}{text_filter}[v]"
+                )
+                logger.info(f"Applying FIT & BLUR layout")
 
-                    # Background layer: fill the 9:16 frame, cropped around the focus point, with blur
-                    scale_ratio = height / src_height
-                    scaled_width = src_width * scale_ratio
-                    crop_x = scaled_width * focus_center - (width / 2)
-                    crop_x = max(0.0, min(crop_x, max(scaled_width - width, 0.0)))
+            else:
+                # CROP MODE (Default / Smart)
+                target_aspect = width / height if height else (9 / 16)
+                focus_center = 0.5
+                smart_crop_applied = False
 
-                    fg_boost = 1.08
-                    boosted_height = int(height * fg_boost)
-                    fg_scale_ratio = boosted_height / src_height
-                    fg_scaled_width = src_width * fg_scale_ratio
-                    fg_crop_x = fg_scaled_width * focus_center - (width / 2)
-                    fg_crop_x = max(0.0, min(fg_crop_x, max(fg_scaled_width - width, 0.0)))
-                    fg_crop_y = max(0.0, (boosted_height - height) / 2)
+                if src_width and src_height:
+                    src_aspect = src_width / src_height if src_height else target_aspect
+                    if src_aspect > target_aspect + 0.02:
+                        # Wide video - Smart Crop
+                        focus_center = self._estimate_focus_center(input_path)
 
-                    filter_complex = (
-                        f"[0:v]scale=-2:{height}:force_original_aspect_ratio=increase,"
-                        f"crop={width}:{height}:{crop_x:.2f}:0,"
-                        f"gblur=sigma=28,eq=brightness=-0.02:saturation=1.12[bg];"
-                        f"[0:v]scale=-2:{int(boosted_height)}:force_original_aspect_ratio=increase,"
-                        f"crop={width}:{height}:{fg_crop_x:.2f}:{fg_crop_y:.2f},"
-                        f"eq=contrast=1.07:saturation=1.05:gamma=1.015[fg];"
-                        f"[bg][fg]overlay=0:0,setsar=1{subtitle_filter}[v]"
-                    )
-                    smart_crop_applied = True
+                        scale_ratio = height / src_height
+                        scaled_width = src_width * scale_ratio
+                        crop_x = scaled_width * focus_center - (width / 2)
+                        crop_x = max(0.0, min(crop_x, max(scaled_width - width, 0.0)))
 
-            if not filter_complex:
-                if src_width and src_height and src_width / src_height <= target_aspect + 0.01:
-                    filter_complex = (
-                        f"[0:v]scale={width}:{height}:force_original_aspect_ratio=decrease,"
-                        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,"
-                        f"setsar=1{subtitle_filter}[v]"
-                    )
-                else:
+                        # Simple smart crop without parallax for cleaner look with text
+                        filter_complex = (
+                            f"[0:v]scale=-2:{height}:force_original_aspect_ratio=increase,"
+                            f"crop={width}:{height}:{crop_x:.2f}:0,"
+                            f"setsar=1{subtitle_filter}{text_filter}[v]"
+                        )
+                        smart_crop_applied = True
+
+                if not filter_complex:
+                    # Fallback center crop
                     filter_complex = (
                         f"[0:v]scale={width*2}:{height*2}:force_original_aspect_ratio=increase,"
                         f"crop={width}:{height},"
-                        f"setsar=1{subtitle_filter}[v]"
+                        f"setsar=1{subtitle_filter}{text_filter}[v]"
                     )
+                
+                if smart_crop_applied:
+                    logger.info(f"Smart focus crop applied at {focus_center:.2f}")
 
-            if smart_crop_applied:
-                logger.info(f"Smart focus crop applied at {focus_center:.2f}")
-            
             cmd = [
                 'ffmpeg',
                 '-y',
                 '-i', input_path,
                 '-filter_complex', filter_complex,
                 '-map', '[v]',
-                '-map', '0:a?',  # Copy audio if exists
+                '-map', '0:a?',
                 '-c:v', 'libx264',
                 '-preset', 'medium',
                 '-crf', '23',
@@ -391,18 +427,68 @@ class VideoProcessor:
                 output_path
             ]
             
-            logger.info(f"Converting to vertical format: {width}x{height}")
+            logger.info(f"Converting to vertical format: {width}x{height} (Layout: {layout})")
             
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=300
-            )
+            # Try first with all filters (including header text)
+            try:
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=300
+                )
+                
+                if result.returncode != 0:
+                    # Check if failure is due to drawtext
+                    if header_text and ("No such filter: 'drawtext'" in result.stderr or "Filter not found" in result.stderr):
+                        logger.warning("FFmpeg 'drawtext' filter missing. Retrying without header text.")
+                        # Rebuild filter without text_filter
+                        if layout == 'fit' and src_width and src_height:
+                             filter_complex = (
+                                f"{bg_chain};{fg_chain};"
+                                f"[bg][fg]overlay=0:(H-h)/2"
+                                f"{subtitle_filter}[v]"
+                            )
+                        else:
+                             # Default crop rebuild
+                             if smart_crop_applied:
+                                 filter_complex = (
+                                    f"[0:v]scale=-2:{height}:force_original_aspect_ratio=increase,"
+                                    f"crop={width}:{height}:{crop_x:.2f}:0,"
+                                    f"setsar=1{subtitle_filter}[v]"
+                                )
+                             else:
+                                 # Standard Center Crop rebuild
+                                 if src_width and src_height and src_width / src_height <= target_aspect + 0.01:
+                                    filter_complex = (
+                                        f"[0:v]scale={width}:{height}:force_original_aspect_ratio=decrease,"
+                                        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,"
+                                        f"setsar=1{subtitle_filter}[v]"
+                                    )
+                                 else:
+                                    filter_complex = (
+                                        f"[0:v]scale={width*2}:{height*2}:force_original_aspect_ratio=increase,"
+                                        f"crop={width}:{height},"
+                                        f"setsar=1{subtitle_filter}[v]"
+                                    )
+                        
+                        # Update command with new complex filter
+                        cmd[cmd.index('-filter_complex') + 1] = filter_complex
+                        
+                        # Retry
+                        result = subprocess.run(
+                            cmd,
+                            capture_output=True,
+                            text=True,
+                            timeout=300
+                        )
+
+                if result.returncode != 0:
+                    raise RuntimeError(f"FFmpeg error: {result.stderr}")
             
-            if result.returncode != 0:
-                raise RuntimeError(f"FFmpeg error: {result.stderr}")
-            
+            except Exception:
+                raise
+
             logger.info(f"Converted to vertical format successfully")
             return output_path
         
@@ -461,7 +547,7 @@ class VideoProcessor:
             logger.error(f"Error adding transitions: {e}")
             raise
     
-    def compile_tiktok_video(self, clips_data, output_path, quality='720p'):
+    def compile_tiktok_video(self, clips_data, output_path, quality='720p', layout='crop', header_text=None):
         """
         Main compilation function
         Takes list of clips with {file_path, start, end, subtitle_path?}
@@ -498,7 +584,9 @@ class VideoProcessor:
                     str(clip_path),
                     str(vertical_path),
                     quality,
-                    subtitle_path=sliced_subtitle
+                    subtitle_path=sliced_subtitle,
+                    layout=layout,
+                    header_text=header_text
                 )
                 
                 temp_clips.append(str(vertical_path))
