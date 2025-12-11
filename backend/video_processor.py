@@ -328,30 +328,35 @@ class VideoProcessor:
             if src_width and src_height:
                 src_aspect = src_width / src_height if src_height else target_aspect
                 if src_aspect > target_aspect + 0.02:
-                    # Wide video – build a parallax effect with a blurred background and a tightened foreground crop
+                    # Wide video – keep more of the frame visible with a gentle dezoom
                     focus_center = self._estimate_focus_center(input_path)
 
                     # Background layer: fill the 9:16 frame, cropped around the focus point, with blur
                     scale_ratio = height / src_height
                     scaled_width = src_width * scale_ratio
-                    crop_x = scaled_width * focus_center - (width / 2)
-                    crop_x = max(0.0, min(crop_x, max(scaled_width - width, 0.0)))
+                    crop_x = max(
+                        0.0,
+                        min(scaled_width * focus_center - (width / 2), scaled_width - width)
+                    )
 
-                    fg_boost = 1.08
-                    boosted_height = int(height * fg_boost)
-                    fg_scale_ratio = boosted_height / src_height
-                    fg_scaled_width = src_width * fg_scale_ratio
-                    fg_crop_x = fg_scaled_width * focus_center - (width / 2)
-                    fg_crop_x = max(0.0, min(fg_crop_x, max(fg_scaled_width - width, 0.0)))
-                    fg_crop_y = max(0.0, (boosted_height - height) / 2)
+                    # Foreground layer: slightly smaller to reduce aggressive zooming
+                    dezoom_ratio = 0.94
+                    fg_width = max(2, int(width * dezoom_ratio))
+                    fg_height = max(2, int(height * dezoom_ratio))
+                    fg_scaled_height = int(fg_width / max(src_aspect, 0.1))
+                    if fg_scaled_height > fg_height:
+                        fg_scaled_height = fg_height
+                        fg_width = int(fg_scaled_height * src_aspect)
+
+                    pad_x = int(max(0, min(width * focus_center - fg_width / 2, width - fg_width)))
+                    pad_y = max((height - fg_scaled_height) // 2, 0)
 
                     filter_complex = (
                         f"[0:v]scale=-2:{height}:force_original_aspect_ratio=increase,"
                         f"crop={width}:{height}:{crop_x:.2f}:0,"
-                        f"gblur=sigma=28,eq=brightness=-0.02:saturation=1.12[bg];"
-                        f"[0:v]scale=-2:{int(boosted_height)}:force_original_aspect_ratio=increase,"
-                        f"crop={width}:{height}:{fg_crop_x:.2f}:{fg_crop_y:.2f},"
-                        f"eq=contrast=1.07:saturation=1.05:gamma=1.015[fg];"
+                        f"gblur=sigma=20[bg];"
+                        f"[0:v]scale={fg_width}:{fg_height}:force_original_aspect_ratio=decrease,"
+                        f"pad={width}:{height}:{pad_x}:{pad_y}:color=black[fg];"
                         f"[bg][fg]overlay=0:0,setsar=1{subtitle_filter}[v]"
                     )
                     smart_crop_applied = True
