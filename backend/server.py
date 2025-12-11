@@ -185,30 +185,57 @@ def slugify_hashtag(text: str) -> Optional[str]:
     return f"#{cleaned[:24]}"
 
 
-def generate_tiktok_caption(videos, moments, target_duration):
+def generate_tiktok_caption(videos, moments, target_duration, style="engaging", use_hashtags=True):
     video_titles = [v.get('title', '') for v in videos if v.get('title')]
     moment_titles = [m.get('title', '') for m in moments if m.get('title')]
     main_title = video_titles[0] if video_titles else "Compilation TikTok"
-    duration_line = f"{int(target_duration)}s de punchlines." if target_duration else "Moments forts compressés."
-    moment_line = ""
-    if moment_titles:
-        moment_line = "Moments: " + ", ".join(moment_titles[:3])
-
-    hashtags = ['#tiktok', '#shorts', '#reels']
-    derived_tags = []
-    for source in video_titles[:2] + moment_titles[:2]:
-        tag = slugify_hashtag(source)
-        if tag and tag not in derived_tags:
-            derived_tags.append(tag)
-    hashtags.extend(derived_tags)
-
-    caption_parts = [
-        f"{main_title} — {duration_line}",
-    ]
-    if moment_line:
-        caption_parts.append(moment_line)
-    caption_parts.append(" ".join(hashtags))
-    return "\n\n".join(caption_parts)
+    
+    # Style presets
+    styles = {
+        "punchy": {
+            "template": "💥 {title}\n\n🎬 {duration}\n\n{moments}",
+            "mood": ["#viral", "#fyp", "#epic"]
+        },
+        "professional": {
+            "template": "📑 {title}\n\n⏱️ Durée: {duration}\n\n📌 Inclus: {moments}",
+            "mood": ["#content", "#creation", "#shorts"]
+        },
+        "engaging": {
+            "template": "😱 Tu ne vas pas croire ça: {title} !\n\n🔥 {duration} de pur contenu.\n\n👇 Regarde jusqu'au bout !",
+            "mood": ["#foryou", "#mustwatch", "#trending"]
+        },
+        "minimal": {
+            "template": "{title}",
+            "mood": []
+        },
+        "animals": {
+            "template": "🐾 {title}\n\n😻 {duration} of cuteness!\n\n👇 Tag a friend who loves animals!",
+            "mood": ["#cute", "#animals", "#pets", "#funny", "#cat", "#dog"]
+        }
+    }
+    
+    selected_style = styles.get(style, styles["engaging"])
+    duration_str = f"{int(target_duration)}s"
+    moments_str = ", ".join(moment_titles[:3]) if moment_titles else "Best moments"
+    
+    caption_text = selected_style["template"].format(
+        title=main_title,
+        duration=duration_str,
+        moments=moments_str
+    )
+    
+    if use_hashtags:
+        base_hashtags = ['#tiktok'] + selected_style["mood"]
+        derived_tags = []
+        for source in video_titles[:2] + moment_titles[:2]:
+            tag = slugify_hashtag(source)
+            if tag and tag not in derived_tags:
+                derived_tags.append(tag)
+        
+        all_tags = list(set(base_hashtags + derived_tags))
+        caption_text += "\n\n" + " ".join(all_tags)
+        
+    return caption_text
 
 
 def _calc_eta(start_time: datetime, percent: float) -> Optional[int]:
@@ -227,7 +254,10 @@ def _init_session(videos, settings):
     session_data = {
         'id': session_id,
         'created_at': datetime.now().isoformat(),
+        'id': session_id,
+        'created_at': datetime.now().isoformat(),
         'videos': videos,
+        'settings': settings,
         'settings': settings,
         'downloaded_files': [],
         'subtitle_files': [],
@@ -281,8 +311,9 @@ def _set_stage(session_id: str, stage: str):
     sessions[session_id] = session
 
 
-def _run_processing(session_id, videos, settings, output_duration, auto_detect, include_subtitles):
-    """Background processing to keep the API responsive and allow progress polling."""
+
+def _run_analysis(session_id, videos, settings, output_duration, auto_detect, include_subtitles):
+    """Background processing: Download and Analyze only."""
     try:
         session = sessions.get(session_id)
         if not session:
@@ -378,6 +409,7 @@ def _run_processing(session_id, videos, settings, output_duration, auto_detect, 
                     moment['videoId'] = video['id']
                     moment['videoIndex'] = idx
                     moment['videoTitle'] = video['title']
+                    moment['filename'] = os.path.basename(downloaded_files[idx]) if downloaded_files[idx] else None
 
                 all_moments.extend(moments)
 
@@ -393,73 +425,136 @@ def _run_processing(session_id, videos, settings, output_duration, auto_detect, 
             except Exception as exc:
                 logger.error(f"Error processing video {video['title']}: {exc}")
                 continue
-
+            
         _update_task(session_id, 'analyze', status='done', progress=100, detail='Analyse terminée', extra={'etaSeconds': 0})
-
+        
+        # STOP HERE for Editor Mode
+        # Only generating initial candidates for the editor
+        
         clip_duration = 4.5
         target_clip_count = max(1, int(output_duration / clip_duration))
         top_moments = sorted(
             all_moments,
             key=lambda x: (-x['score'], x.get('start', 0.0))
         )[:target_clip_count]
-
+        
+        # Fallback if no moments
         if not top_moments and processed_indexes:
-            logger.warning("No moments detected; generating fallback clips from raw videos.")
+            logger.warning("No moments detected; generating fallback clips.")
             fallback_count = len(processed_indexes)
             slice_duration = max(6, int(output_duration / max(1, fallback_count)))
-            fallback_moments = []
             for idx in processed_indexes:
                 video = videos[idx]
-                video_title = video.get('title', f'Clip {idx + 1}')
                 video_duration = max(video_durations[idx], slice_duration)
                 end_time = min(video_duration, slice_duration)
-                if end_time <= 0:
-                    continue
-                fallback_moments.append({
+                top_moments.append({
                     'start': 0.0,
                     'end': end_time,
                     'timestamp': "0:00",
                     'duration': f"{int(end_time)}s",
-                    'title': f"Extrait principal · {video_title}",
+                    'title': f"Extrait principal · {video.get('title')}",
                     'score': 0.6,
                     'engagementLevel': 'Medium',
                     'videoId': video.get('id', ''),
                     'videoIndex': idx,
-                    'videoTitle': video_title
+                    'videoTitle': video.get('title'),
+                    'filename': os.path.basename(downloaded_files[idx]) if downloaded_files[idx] else None
                 })
-            top_moments = fallback_moments
-        if not top_moments:
-            raise RuntimeError("Unable to detect or generate any clips for this session.")
 
-        target_seconds = max(10.0, float(output_duration))
-        top_moments = clamp_moments_to_duration(top_moments, target_seconds)
-
+        # Don't clamp yet, let the user edit
         session_data = sessions.get(session_id, {})
         session_data['downloaded_files'] = downloaded_files
-        session_data['moments'] = top_moments
-        session_data['status'] = 'ready'
+        session_data['moments'] = top_moments # Initial proposal
+        session_data['all_detected_moments'] = all_moments # Backup for swapping
+        session_data['status'] = 'analyzed' # NEW STATE: Ready for editing
         session_data['subtitle_files'] = subtitle_files
         session_data['video_durations'] = video_durations
         session_data['videoCount'] = len(videos)
-        session_data['clipCount'] = len(top_moments)
-        session_data['totalDuration'] = output_duration
-        session_data['stage'] = 'Prêt pour compilation'
-        session_data['etaTotalSeconds'] = 0
-        session_data['tiktok_caption'] = generate_tiktok_caption(videos, top_moments, output_duration)
+        session_data['stage'] = 'Prêt pour édition'
+        
         sessions[session_id] = session_data
-        _update_task(session_id, 'compile', detail='Clique sur Télécharger pour lancer la compilation')
+        _update_task(session_id, 'compile', detail='En attente de validation')
+        
+        logger.info(f"Session {session_id} analyzed. Waiting for edit/compile.")
 
-        logger.info(f"Session {session_id} ready with {len(top_moments)} moments")
     except Exception as exc:
-        logger.error(f"Error in background processing: {exc}", exc_info=True)
+        logger.error(f"Error in analysis: {exc}", exc_info=True)
         session = sessions.get(session_id)
         if session:
             session['status'] = 'error'
             session['error'] = str(exc)
             session['stage'] = 'Erreur'
-            session['progress'] = 0
             sessions[session_id] = session
 
+
+def _run_compilation(session_id, moments, settings):
+    """Background processing: Compilation only."""
+    try:
+        session_data = sessions.get(session_id)
+        if not session_data or session_data['status'] != 'analyzed':
+             logger.error(f"Invalid session state for compilation: {session_id}")
+             return
+
+        _set_stage(session_id, 'Compilation finale')
+        _update_task(session_id, 'compile', status='in_progress', detail='Préparation du rendu')
+        
+        videos = session_data.get('videos', [])
+        subtitle_files = session_data.get('subtitle_files', [])
+        video_durations = session_data.get('video_durations', [])
+        downloaded_files = session_data.get('downloaded_files', [])
+        
+        # Generate Caption
+        output_duration = sum([float(m['end']) - float(m['start']) for m in moments])
+        style = settings.get('captionStyle', 'engaging')
+        use_tags = settings.get('hashtags', True)
+        tiktok_caption = generate_tiktok_caption(
+            videos, moments, output_duration,
+            style=style,
+            use_hashtags=use_tags
+        )
+        
+        # Update session with final moments
+        session_data['moments'] = moments
+        session_data['tiktok_caption'] = tiktok_caption
+        session_data['clipCount'] = len(moments)
+        session_data['totalDuration'] = output_duration
+        sessions[session_id] = session_data
+
+        # Run Video Compilation
+        # Note: We reuse the existing logic in download_video, but we need to generate it here to be 'ready'
+        # Actually, the previous flow had /api/download-video trigger the compile.
+        # We can keep that pattern or pre-compile here.
+        # Let's pre-compile to a temporary file so 'ready' means 'ready to download immediately'.
+        
+        # ... Wait, the existing /api/download-video endpoint handles dynamic compilation. 
+        # But for 'ready' state we usually expect the work to be done.
+        # Let's mark it as 'ready' and let /api/download-video do the actual file generation as before,
+        # OR we generate the main artifact now. 
+        # Given the codebase structure, /api/download-video does the heavy lifting.
+        # However, to support "Preview", we should probably render a draft or final here.
+        
+        # Let's update status to 'ready' so the frontend shows the Preview UI.
+        # The Preview UI relies on `compiledVideoUrl` if `compiledVideoUrl` is set, OR it calls download?
+        # The original code didn't pre-render a preview URL in `sessions`. It relied on `process_videos` finishing.
+        # But `process_videos` ... wait, `process_videos` didn't actually call `compile_tiktok_video`?
+        # Checking original code... 
+        # Original `process_videos` (lines 482+) generated the caption but DID NOT call `video_processor.compile_tiktok_video`.
+        # The compilation happened inside `/api/download-video` (lines 721).
+        
+        # SO: We just need to mark status as 'ready' here.
+        
+        session_data['status'] = 'ready'
+        session_data['stage'] = 'Prêt pour export'
+        sessions[session_id] = session_data
+        
+        _update_task(session_id, 'compile', status='done', detail='Prêt à télécharger')
+        
+    except Exception as exc:
+        logger.error(f"Error in compilation: {exc}", exc_info=True)
+        session = sessions.get(session_id)
+        if session:
+            session['status'] = 'error'
+            session['error'] = str(exc)
 
 @app.route('/health', methods=['GET'])
 def health_check():
@@ -524,12 +619,10 @@ def detect_videos():
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/process-video', methods=['POST'])
-def process_videos():
+@app.route('/api/analyze-moments', methods=['POST'])
+def analyze_moments():
     """
-    Process videos and detect best moments
-    Expects: { "videos": [...], "settings": {duration, quality, ...} }
-    Returns: { "sessionId": "...", "moments": [...] }
+    Step 1: Download & Analyze videos
     """
     try:
         cleanup_old_sessions()
@@ -542,16 +635,15 @@ def process_videos():
             return jsonify({'error': 'No videos provided'}), 400
         
         output_duration = int(settings.get('duration', 30))
-        quality = settings.get('quality', '720p')
         auto_detect = settings.get('autoDetect', True)
         include_subtitles = settings.get('includeSubtitles', True)
         
-        logger.info(f"Processing {len(videos)} videos for {output_duration}s compilation")
+        logger.info(f"Starting analysis for {len(videos)} videos")
 
         session_id, _ = _init_session(videos, settings)
 
         processing_thread = Thread(
-            target=_run_processing,
+            target=_run_analysis,
             args=(session_id, videos, settings, output_duration, auto_detect, include_subtitles),
             daemon=True
         )
@@ -564,8 +656,40 @@ def process_videos():
         })
     
     except Exception as e:
-        logger.error(f"Error in process_videos: {e}", exc_info=True)
+        logger.error(f"Error in analyze_moments: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/compile-final', methods=['POST'])
+def compile_final():
+    """
+    Step 2: Finalize moments and prepare for download
+    """
+    try:
+        data = request.get_json()
+        session_id = data.get('sessionId')
+        moments = data.get('moments', [])
+        settings = data.get('settings', {})
+        
+        if not session_id or not sessions.get(session_id):
+            return jsonify({'error': 'Invalid Session'}), 404
+            
+        logger.info(f"Finalizing compilation for session {session_id} with {len(moments)} clips")
+        
+        # Update settings if changed during edit
+        if settings:
+            sessions[session_id]['settings'].update(settings)
+            
+        _run_compilation(session_id, moments, sessions[session_id]['settings'])
+        
+        return jsonify({
+            'success': True,
+            'status': 'ready'
+        })
+
+    except Exception as e:
+        logger.error(f"Error in compile_final: {e}")
+        return jsonify({'error': str(e)}), 500
+
 
 
 @app.route('/api/progress/<session_id>', methods=['GET'])
@@ -585,7 +709,7 @@ def get_progress(session_id):
         'tiktokCaption': session.get('tiktok_caption'),
     }
 
-    if session.get('status') == 'ready':
+    if session.get('status') in ['ready', 'analyzed']:
         moments_preview = [
             {
                 'order': idx + 1,
@@ -594,7 +718,8 @@ def get_progress(session_id):
                 'title': moment['title'],
                 'score': moment['score'],
                 'engagementLevel': moment.get('engagementLevel', 'Medium'),
-                'videoTitle': moment['videoTitle']
+                'videoTitle': moment['videoTitle'],
+                'filename': moment.get('filename')
             }
             for idx, moment in enumerate(session.get('moments', []))
         ]
@@ -603,7 +728,9 @@ def get_progress(session_id):
             'videoCount': session.get('videoCount', len(session.get('videos', []))),
             'clipCount': session.get('clipCount'),
             'totalDuration': session.get('totalDuration'),
+            'totalDuration': session.get('totalDuration'),
             'tiktokCaption': session.get('tiktok_caption'),
+            'videoDurations': session.get('video_durations', []),
         })
 
     return jsonify(response)
@@ -674,12 +801,18 @@ def download_video():
         # Compile video in TikTok format (9:16)
         output_path = TEMP_DIR / f"compilation_{session_id}.mp4"
         
-        logger.info(f"Compiling {len(clips)} clips into TikTok format...")
+        settings = session_data.get('settings', {})
+        layout = settings.get('layout', 'crop')
+        header_text = settings.get('headerText', '')
+
+        logger.info(f"Compiling {len(clips)} clips into TikTok format (Layout: {layout})...")
         _update_task(session_id, 'compile', progress=50, detail='Encodage en cours')
         video_processor.compile_tiktok_video(
             clips,
             str(output_path),
-            quality
+            quality,
+            layout=layout,
+            header_text=header_text
         )
         
         logger.info(f"Video compilation complete: {output_path}")
@@ -750,10 +883,54 @@ def delete_session(session_id):
             except Exception as e:
                 logger.error(f"Error removing subtitle file {sub_path}: {e}")
 
-        return jsonify({'success': True})
-    
     except Exception as e:
         logger.error(f"Error deleting session: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/cleanup', methods=['POST'])
+def force_cleanup():
+    """Force cleanup of all old sessions and temp files"""
+    try:
+        cleanup_old_sessions()
+        # Also try to clean up any orphaned files in temp dir older than 2 hours
+        now = time.time()
+        count = 0
+        for item in TEMP_DIR.glob('*'):
+            if item.is_file() and item.stat().st_mtime < now - 7200:
+                try:
+                    item.unlink()
+                    count += 1
+                except Exception:
+                    pass
+            elif item.is_dir() and item.name.startswith('session_') and item.stat().st_mtime < now - 7200:
+                try:
+                    shutil.rmtree(item)
+                    count += 1
+                except Exception:
+                    pass
+        
+        return jsonify({'success': True, 'cleaned_items': count})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/temp/<path:filename>', methods=['GET'])
+def serve_temp_file(filename):
+    """Serve a file from the temp directory"""
+    try:
+        # Security check: ensure file is within TEMP_DIR
+        safe_path = Path(TEMP_DIR) / filename
+        safe_path = safe_path.resolve()
+        
+        if not str(safe_path).startswith(str(TEMP_DIR)):
+            return jsonify({'error': 'Access denied'}), 403
+            
+        if not safe_path.exists():
+            return jsonify({'error': 'File not found'}), 404
+            
+        return send_file(safe_path)
+    except Exception as e:
+        logger.error(f"Error serving file {filename}: {e}")
         return jsonify({'error': str(e)}), 500
 
 

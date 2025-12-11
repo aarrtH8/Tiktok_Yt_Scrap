@@ -1,3 +1,4 @@
+
 """
 YouTube Downloader Module
 Handles downloading videos from YouTube using yt-dlp
@@ -239,6 +240,12 @@ class YouTubeDownloader:
 
             if not self.generator_script.exists():
                 logger.warning("Cookie generator script not found; continuing without cookies.")
+                return
+
+            try:
+                from playwright.sync_api import sync_playwright
+            except ImportError:
+                logger.warning("Playwright not installed; skipping cookie generation.")
                 return
 
             logger.info("Generating fresh public cookies for YouTube (headless Playwright)...")
