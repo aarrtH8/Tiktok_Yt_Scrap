@@ -458,7 +458,8 @@ def _run_analysis(session_id, videos, settings, output_duration, auto_detect, in
                     'videoId': video.get('id', ''),
                     'videoIndex': idx,
                     'videoTitle': video.get('title'),
-                    'filename': os.path.basename(downloaded_files[idx]) if downloaded_files[idx] else None
+                    'filename': os.path.basename(downloaded_files[idx]) if downloaded_files[idx] else None,
+                    'id': str(uuid.uuid4()) # Unique ID for frontend reordering
                 })
 
         # Don't clamp yet, let the user edit
@@ -719,7 +720,8 @@ def get_progress(session_id):
                 'score': moment['score'],
                 'engagementLevel': moment.get('engagementLevel', 'Medium'),
                 'videoTitle': moment['videoTitle'],
-                'filename': moment.get('filename')
+                'filename': moment.get('filename'),
+                'id': moment.get('id', str(uuid.uuid4()))
             }
             for idx, moment in enumerate(session.get('moments', []))
         ]
