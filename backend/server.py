@@ -325,6 +325,10 @@ def _update_task(session_id: str, task_id: str, status: Optional[str] = None, pr
         if task['id'] == task_id:
             if status:
                 task['status'] = status
+                if status == 'in_progress':
+                    task['startedAt'] = datetime.now().isoformat()
+                elif status == 'done':
+                    task['completedAt'] = datetime.now().isoformat()
             if progress is not None:
                 task['progress'] = max(0, min(100, progress))
             if detail is not None:

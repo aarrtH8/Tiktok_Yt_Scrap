@@ -8,6 +8,10 @@ import {
   Clock,
 } from 'lucide-react';
 import { useState } from 'react';
+import {
+  formatActivityDuration,
+  formatActivityTime,
+} from '@/lib/activity-log';
 
 type ProcessingStage =
   | 'idle'
@@ -22,7 +26,9 @@ type ProcessingStage =
 type ActivityItem = {
   stage: ProcessingStage;
   label: string;
-  timestamp: string;
+  timestamp?: string;
+  startedAt?: string;
+  durationMs?: number;
 };
 
 type ProcessingProps = {
@@ -213,14 +219,18 @@ export default function ProcessingInterface({
             <ul className="space-y-2 text-sm">
               {activityLog.map((item, idx) => (
                 <li
-                  key={`${item.stage}-${item.timestamp}-${idx}`}
-                  className="flex items-start justify-between rounded-lg bg-muted/40 px-3 py-2"
+                  key={item.timestamp ? `${item.stage}-${item.timestamp}-${idx}` : `${item.stage}-${idx}`}
+                  className="flex items-start justify-between gap-3 rounded-lg bg-muted/40 px-3 py-2"
                 >
-                  <div>
+                  <div className="flex-1">
                     <p className="font-medium text-foreground">{item.label}</p>
                     <p className="text-xs text-muted-foreground capitalize">{item.stage}</p>
                   </div>
-                  <span className="text-xs text-muted-foreground mt-1">{item.timestamp}</span>
+                  <div className="text-right text-[11px] text-muted-foreground">
+                    <p>Début · {formatActivityTime(item.startedAt)}</p>
+                    <p>Fin · {formatActivityTime(item.timestamp)}</p>
+                    <p>Durée · {formatActivityDuration(item)}</p>
+                  </div>
                 </li>
               ))}
             </ul>

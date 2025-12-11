@@ -8,6 +8,11 @@ import CompilationSettings from '@/components/compilation-settings';
 import ProcessingInterface from '@/components/processing-interface';
 import AnimatedBackground from '@/components/animated-background';
 import BestPracticesChecklist from '@/components/best-practices';
+import {
+  computeActivityDuration,
+  formatActivityDuration,
+  formatActivityTime,
+} from '@/lib/activity-log';
 
 type ProcessingStage =
   | 'idle'
@@ -20,9 +25,12 @@ type ProcessingStage =
   | 'error';
 
 type ActivityItem = {
+  innerTaskId?: string;
   stage: ProcessingStage;
   label: string;
-  timestamp: string;
+  timestamp?: string;
+  startedAt?: string;
+  durationMs?: number;
 };
 
 export default function Home() {
@@ -87,29 +95,52 @@ export default function Home() {
     return 'detect';
   };
 
-  const taskStageMap: Record<string, ProcessingStage> = {
-    download: 'download',
-    analyze: 'highlights',
-    compile: 'finalize',
-  };
+  const taskStageMap = useMemo<Record<string, ProcessingStage>>(
+    () => ({
+      download: 'download',
+      analyze: 'highlights',
+      compile: 'finalize',
+    }),
+    [],
+  );
 
   useEffect(() => {
     if (processingStage === 'idle') return;
     const message = stageMessages[processingStage];
     if (!message) return;
+    const nowIso = new Date().toISOString();
+    const isTerminalStage = processingStage === 'completed' || processingStage === 'error';
 
     setActivityLog(prev => {
-      if (prev.length && prev[prev.length - 1]?.stage === processingStage) {
-        return prev;
+      const next = [...prev];
+      const lastIndex = next.length - 1;
+      if (lastIndex >= 0) {
+        const lastItem = next[lastIndex];
+        if (lastItem && !lastItem.innerTaskId && lastItem.startedAt && !lastItem.timestamp) {
+          const finalizedDuration = computeActivityDuration({
+            startedAt: lastItem.startedAt,
+            timestamp: nowIso,
+          });
+          next[lastIndex] = {
+            ...lastItem,
+            timestamp: nowIso,
+            durationMs: finalizedDuration,
+          };
+        }
       }
-      const next = [
-        ...prev,
-        {
-          stage: processingStage,
-          label: message,
-          timestamp: new Date().toLocaleTimeString(),
-        },
-      ];
+
+      if (next.length && next[next.length - 1]?.stage === processingStage) {
+        return next;
+      }
+
+      const newItem: ActivityItem = {
+        stage: processingStage,
+        label: message,
+        startedAt: nowIso,
+        timestamp: isTerminalStage ? nowIso : undefined,
+        durationMs: isTerminalStage ? 0 : undefined,
+      };
+      next.push(newItem);
       return next.slice(-7);
     });
   }, [processingStage, stageMessages]);
@@ -239,16 +270,50 @@ export default function Home() {
         setProcessingStage(prev => (nextStage ? nextStage : prev));
 
         if (Array.isArray(data.tasks) && data.tasks.length) {
-          const logEntries = data.tasks
-            .filter(task => task.status !== 'pending')
-            .map(task => ({
-              stage: taskStageMap[task.id] || 'detect',
-              label: `${task.label}${task.detail ? ` · ${task.detail}` : ''}`,
-              timestamp: new Date().toLocaleTimeString(),
-            }));
-          if (logEntries.length) {
-            setActivityLog(logEntries.slice(-7));
-          }
+          setActivityLog(prev => {
+            const latest = [...prev];
+
+            const upsertTask = (task: any) => {
+              const stageName = taskStageMap[task.id] || 'detect';
+              const existingIndex = latest.findIndex(item => item.innerTaskId === task.id);
+              const nowIso = new Date().toISOString();
+              const startedAtIso =
+                task.startedAt || latest[existingIndex]?.startedAt || nowIso;
+              const completedAtIso =
+                task.completedAt ||
+                (task.status === 'done' ? nowIso : latest[existingIndex]?.timestamp);
+              let durationMs = task.durationMs;
+              if (startedAtIso) {
+                const durationReference =
+                  completedAtIso || (task.status === 'in_progress' ? nowIso : undefined);
+                if (!durationMs && durationReference) {
+                  durationMs = computeActivityDuration({
+                    startedAt: startedAtIso,
+                    timestamp: durationReference,
+                  });
+                }
+              }
+              const item: ActivityItem = {
+                innerTaskId: task.id,
+                stage: stageName,
+                label: `${task.label}${task.detail ? ` · ${task.detail}` : ''}`,
+                timestamp: completedAtIso,
+                startedAt: startedAtIso,
+                durationMs,
+              };
+              if (existingIndex >= 0) {
+                latest[existingIndex] = item;
+              } else {
+                latest.push(item);
+              }
+            };
+
+            data.tasks.forEach(task => {
+              if (task.status === 'pending') return;
+              upsertTask(task);
+            });
+            return latest.slice(-7);
+          });
         }
 
         if (data.tiktokCaption) {
@@ -286,7 +351,7 @@ export default function Home() {
       clearInterval(intervalId);
       progressPollRef.current = null;
     };
-  }, [sessionId, isProcessing]);
+  }, [sessionId, isProcessing, taskStageMap]);
 
   useEffect(() => {
     if (step === 'preview' && bestMoments.length) {
@@ -544,13 +609,22 @@ export default function Home() {
                 </div>
                 <div className="mt-6 space-y-4">
                   {activityLog.length > 0 ? (
-                    activityLog.map(item => (
+                    activityLog.map((item, idx) => (
                       <div
-                        key={`${item.stage}-${item.timestamp}`}
-                        className="flex items-center justify-between rounded-2xl border border-white/5 bg-white/5 px-3 py-2 text-xs text-white/70"
+                        key={item.innerTaskId ?? `${item.stage}-${item.startedAt ?? idx}-${idx}`}
+                        className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/5 bg-white/5 px-3 py-2 text-xs text-white/70"
                       >
-                        <span>{item.label}</span>
-                        <span className="text-white/50">{item.timestamp}</span>
+                        <div>
+                          <p className="font-medium">{item.label}</p>
+                          <p className="text-[11px] uppercase tracking-wide text-white/50">
+                            {item.stage}
+                          </p>
+                        </div>
+                        <div className="text-right text-[11px] text-white/60">
+                          <p>Début · {formatActivityTime(item.startedAt)}</p>
+                          <p>Fin · {formatActivityTime(item.timestamp)}</p>
+                          <p>Durée · {formatActivityDuration(item)}</p>
+                        </div>
                       </div>
                     ))
                   ) : (
@@ -767,68 +841,3 @@ export default function Home() {
     </div>
   );
 }
-                    <div className="rounded-xl border border-border bg-muted/30 p-4">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <h4 className="text-base font-semibold text-foreground">Moments sélectionnés</h4>
-                          <p className="text-sm text-muted-foreground">
-                            Réorganise ou masque des clips avant l’export final.
-                          </p>
-                        </div>
-                        <button
-                          onClick={saveReviewOrder}
-                          disabled={!hasReviewChanges || isSavingReview}
-                          className="rounded-full bg-primary/80 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-primary-foreground disabled:opacity-40"
-                        >
-                          {isSavingReview ? 'Sauvegarde...' : 'Sauvegarder l’ordre'}
-                        </button>
-                      </div>
-                      {reviewError && (
-                        <p className="mt-2 text-sm text-destructive">{reviewError}</p>
-                      )}
-                      <div className="mt-4 space-y-3">
-                        {reviewMoments.map((moment, index) => (
-                          <div
-                            key={moment.id || index}
-                            className={`flex items-center justify-between rounded-xl border px-3 py-2 text-sm ${
-                              moment.enabled
-                                ? 'border-border bg-background/80'
-                                : 'border-dashed border-border/60 bg-muted/30 text-muted-foreground'
-                            }`}
-                          >
-                            <div>
-                              <p className="text-base font-medium">{moment.title}</p>
-                              <p className="text-xs text-muted-foreground">
-                                #{index + 1} · {moment.duration} · {moment.videoTitle || 'Source'}
-                              </p>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <button
-                                onClick={() => moveReviewMoment(moment.id, 'up')}
-                                disabled={index === 0}
-                                className="rounded-full border border-border/60 px-2 py-1 text-xs disabled:opacity-40"
-                              >
-                                ↑
-                              </button>
-                              <button
-                                onClick={() => moveReviewMoment(moment.id, 'down')}
-                                disabled={index === reviewMoments.length - 1}
-                                className="rounded-full border border-border/60 px-2 py-1 text-xs disabled:opacity-40"
-                              >
-                                ↓
-                              </button>
-                              <button
-                                onClick={() => toggleReviewMoment(moment.id)}
-                                className={`rounded-full border px-3 py-1 text-xs font-semibold ${
-                                  moment.enabled
-                                    ? 'border-destructive/50 text-destructive'
-                                    : 'border-emerald-400/50 text-emerald-400'
-                                }`}
-                              >
-                                {moment.enabled ? 'Masquer' : 'Restaurer'}
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>

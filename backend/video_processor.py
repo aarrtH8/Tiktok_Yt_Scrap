@@ -291,14 +291,20 @@ class VideoProcessor:
     def _build_overlay_filter(self, width, height, overlay_info):
         if not overlay_info:
             return ""
+        def escape_text(value: str) -> str:
+            escaped = value.replace('\\', '\\\\').replace("'", r"\'")
+            escaped = escaped.replace(':', r'\:').replace('[', r'\[').replace(']', r'\]')
+            escaped = escaped.replace(',', r'\,').replace(';', r'\;').replace('=', r'\=')
+            return escaped
+
         title = (overlay_info.get('title') or 'Moment clé')[:48]
         source = (overlay_info.get('source') or 'Source')[:42]
         clip_index = overlay_info.get('index', 0)
         total_clips = max(overlay_info.get('total', clip_index + 1), clip_index + 1)
         progress_ratio = (clip_index + 1) / total_clips
         progress_width = int((width - 160) * progress_ratio)
-        title = title.replace(":", "\\:").replace("'", r"\'")
-        source = source.replace(":", "\\:").replace("'", r"\'")
+        title = escape_text(title)
+        source = escape_text(source)
 
         bold_font = DEFAULT_BOLD_FONT.replace(":", "\\:").replace("'", r"\'")
         regular_font = DEFAULT_FONT.replace(":", "\\:").replace("'", r"\'")
@@ -465,7 +471,12 @@ class VideoProcessor:
             })
 
             if overlay_filter:
-                filter_complex = f"{filter_complex},{overlay_filter}"
+                prefix, marker, suffix = filter_complex.rpartition('[v]')
+                if marker:
+                    separator = '' if prefix.endswith(',') else ','
+                    filter_complex = f"{prefix}{separator}{overlay_filter}{marker}{suffix}"
+                else:
+                    filter_complex = f"{filter_complex},{overlay_filter}"
             
             cmd = [
                 'ffmpeg',
