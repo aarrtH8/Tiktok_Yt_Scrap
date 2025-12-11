@@ -17,8 +17,8 @@ logger = logging.getLogger(__name__)
 class MomentDetector:
     def __init__(self):
         self.scene_threshold = 0.4
-        self.min_clip_duration = 3
-        self.max_clip_duration = 8
+        self.min_clip_duration = 6
+        self.max_clip_duration = 9
         self.scene_padding = 0.75
     
     def get_video_duration(self, video_path):
@@ -154,7 +154,7 @@ class MomentDetector:
             logger.error(f"Error analyzing audio: {e}")
             return []
     
-    def detect_moments(self, video_path, video_duration, target_duration, video_title):
+    def detect_moments(self, video_path, video_duration, target_duration, video_title, scene_times=None):
         """
         Detect best moments in a video
         Combines scene detection and audio analysis
@@ -163,7 +163,7 @@ class MomentDetector:
             logger.info(f"Detecting moments in {video_title}")
             
             # Get scene changes
-            scene_times = self.detect_scene_changes(video_path)
+            scene_times = scene_times if scene_times is not None else self.detect_scene_changes(video_path)
             
             # Get high-energy moments
             energy_times = self.analyze_audio_energy(video_path)
@@ -176,7 +176,7 @@ class MomentDetector:
                 return self.distribute_moments(video_duration, target_duration, video_title)
             
             # Calculate how many clips we need
-            clip_duration = 4.5  # Average clip duration
+            clip_duration = 7.0  # Average clip duration
             num_clips = max(1, int(target_duration / clip_duration))
             
             # Score each potential moment
@@ -212,14 +212,13 @@ class MomentDetector:
             engagement_levels = ['High', 'Medium', 'High', 'Medium']
             
             for idx, moment in enumerate(selected_moments):
-                clip_len = random.uniform(self.min_clip_duration + 0.5, self.max_clip_duration)
+                clip_len = random.uniform(self.min_clip_duration, self.max_clip_duration)
                 start_time, end_time = self._determine_clip_window(
                     moment['timestamp'],
                     clip_len,
                     video_duration,
                     scene_times
                 )
-
                 minutes = int(start_time // 60)
                 seconds = int(start_time % 60)
 
@@ -246,7 +245,7 @@ class MomentDetector:
         Fallback method: Distribute moments evenly across the video
         with some randomness
         """
-        clip_duration = 4.5
+        clip_duration = 7.0
         num_clips = max(1, int(target_duration / clip_duration))
         safe_duration = max(video_duration, clip_duration + 2)
         

@@ -7,7 +7,10 @@ import yt_dlp
 import subprocess
 import logging
 from pathlib import Path
+import os
 import re
+import sys
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +19,14 @@ class YouTubeDownloader:
     def __init__(self, temp_dir):
         self.temp_dir = Path(temp_dir)
         self.temp_dir.mkdir(exist_ok=True)
+        # Optional cookie file for YouTube auth (set env YTDLP_COOKIES=/path/to/cookies.txt)
+        default_cookie_path = Path("/tmp/ytdlp_public_cookies.txt")
+        self.cookie_file = Path(os.environ.get("YTDLP_COOKIES", default_cookie_path))
+        self.cookie_ttl_seconds = 3600  # refresh cookies every hour
+        self.generator_script = Path(__file__).parent / "generate_public_cookies.py"
+
+        # Generate cookies upfront if needed (non-auth public session)
+        self.ensure_cookies()
     
     def check_ytdlp(self):
         """Check if yt-dlp is available"""
@@ -55,6 +66,9 @@ class YouTubeDownloader:
                 'extract_flat': False,
             }
             
+            if self.cookie_file and Path(self.cookie_file).exists():
+                ydl_opts['cookiefile'] = str(self.cookie_file)
+
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
                 
@@ -113,13 +127,13 @@ class YouTubeDownloader:
 
         return None
 
-    def download_video(self, url, session_id, video_id, download_subtitles=True):
+    def download_video(self, url, session_id, video_id, download_subtitles=True, progress_callback=None):
         """Download video and optional subtitles. Returns (video_path, subtitle_path)."""
         try:
             output_path = self.temp_dir / f"{session_id}_{video_id}.mp4"
 
             def build_opts(enable_subs: bool):
-                return {
+                opts = {
                     'format': 'best[ext=mp4][height<=1080]/best[ext=mp4]/best',
                     'outtmpl': str(output_path),
                     'quiet': False,
@@ -134,6 +148,20 @@ class YouTubeDownloader:
                         'preferedformat': 'mp4',
                     }],
                 }
+                if self.cookie_file and Path(self.cookie_file).exists():
+                    opts['cookiefile'] = str(self.cookie_file)
+                if progress_callback:
+                    def _hook(data):
+                        if data.get('status') == 'downloading':
+                            downloaded = data.get('downloaded_bytes') or 0
+                            total = data.get('total_bytes') or data.get('total_bytes_estimate')
+                            try:
+                                progress_callback(downloaded, total)
+                            except Exception:
+                                pass
+                    opts['progress_hooks'] = [_hook]
+                    opts['noprogress'] = True
+                return opts
 
             attempt_subtitles = bool(download_subtitles)
             last_error = None
@@ -171,7 +199,6 @@ class YouTubeDownloader:
             if last_error:
                 logger.error(f"Failed to download video {url}: {last_error}")
                 raise last_error
-
             # yt-dlp might add extension, check for the file
             if not output_path.exists():
                 for ext in ['.mp4', '.mkv', '.webm']:
@@ -199,3 +226,31 @@ class YouTubeDownloader:
         except Exception as e:
             logger.error(f"Error downloading video {url}: {e}")
             raise
+
+    # Internal helpers
+    def ensure_cookies(self):
+        """Generate a fresh public cookie jar if missing or stale."""
+        try:
+            path = Path(self.cookie_file)
+            if path.exists():
+                age = time.time() - path.stat().st_mtime
+                if age < self.cookie_ttl_seconds:
+                    return
+
+            if not self.generator_script.exists():
+                logger.warning("Cookie generator script not found; continuing without cookies.")
+                return
+
+            logger.info("Generating fresh public cookies for YouTube (headless Playwright)...")
+            result = subprocess.run(
+                [sys.executable, str(self.generator_script), "--output", str(path)],
+                capture_output=True,
+                text=True,
+                timeout=120
+            )
+            if result.returncode != 0:
+                logger.warning(f"Failed to generate cookies: {result.stderr.strip()}")
+            else:
+                logger.info(f"Public cookies generated at {path}")
+        except Exception as e:
+            logger.warning(f"Could not generate cookies automatically: {e}")

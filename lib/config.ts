@@ -11,6 +11,7 @@ export const API_ENDPOINTS = {
   detectVideo: `${API_BASE_URL}/api/detect-video`,
   processVideo: `${API_BASE_URL}/api/process-video`,
   downloadVideo: `${API_BASE_URL}/api/download-video`,
+  progress: (sessionId: string) => `${API_BASE_URL}/api/progress/${sessionId}`,
   deleteSession: (sessionId: string) => `${API_BASE_URL}/api/sessions/${sessionId}`,
 };
 
