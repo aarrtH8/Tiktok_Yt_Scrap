@@ -123,3 +123,154 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* ===== Custom motion + glassmorphism utilities ===== */
+.aurora-gradient {
+  position: absolute;
+  inset: -20% -10%;
+  background: radial-gradient(circle at 20% 20%, rgba(147, 197, 253, 0.35), transparent 45%),
+    radial-gradient(circle at 80% 0%, rgba(248, 113, 113, 0.35), transparent 50%),
+    radial-gradient(circle at 50% 80%, rgba(192, 132, 252, 0.45), transparent 50%);
+  filter: blur(80px);
+  animation: aurora-pan 26s linear infinite alternate;
+  opacity: 0.9;
+}
+
+.grid-overlay {
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(rgba(255, 255, 255, 0.065) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.065) 1px, transparent 1px);
+  background-size: 160px 160px;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.65), transparent);
+  mix-blend-mode: screen;
+}
+
+.noise-overlay {
+  position: absolute;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160' viewBox='0 0 160 160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='.12'/%3E%3C/svg%3E");
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.floating-orb {
+  position: absolute;
+  width: clamp(160px, 25vw, 320px);
+  aspect-ratio: 1;
+  border-radius: 9999px;
+  filter: blur(12px);
+  opacity: 0.4;
+  animation: float 18s ease-in-out infinite;
+}
+
+.glass-panel {
+  backdrop-filter: blur(18px);
+  background-color: color-mix(in srgb, var(--background) 70%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  box-shadow: 0 25px 80px rgba(16, 24, 40, 0.18);
+}
+
+.shine-border {
+  position: relative;
+}
+
+.shine-border::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(
+    120deg,
+    rgba(96, 165, 250, 0.4),
+    rgba(248, 113, 113, 0.4),
+    rgba(192, 132, 252, 0.4)
+  );
+  mask: linear-gradient(#000, #000) content-box, linear-gradient(#000, #000);
+  mask-composite: exclude;
+  animation: border-sheen 8s linear infinite;
+  pointer-events: none;
+}
+
+.shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.shimmer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    120deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.3) 40%,
+    transparent 80%
+  );
+  transform: translateX(-100%);
+  animation: shimmer 6s ease-in-out infinite;
+}
+
+.timeline-connector {
+  position: absolute;
+  left: 14px;
+  top: 20px;
+  width: 2px;
+  height: calc(100% - 20px);
+  background: linear-gradient(180deg, transparent, rgba(59, 130, 246, 0.4));
+}
+
+@keyframes aurora-pan {
+  0% {
+    transform: translate3d(-10%, -5%, 0) rotate(0deg);
+  }
+  50% {
+    transform: translate3d(5%, 5%, 0) rotate(10deg);
+  }
+  100% {
+    transform: translate3d(10%, -5%, 0) rotate(0deg);
+  }
+}
+
+@keyframes float {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(5%, -5%, 0) scale(1.05);
+  }
+  100% {
+    transform: translate3d(-3%, 4%, 0) scale(1);
+  }
+}
+
+@keyframes border-sheen {
+  0% {
+    filter: hue-rotate(0deg);
+  }
+  100% {
+    filter: hue-rotate(360deg);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%) skewX(-10deg);
+  }
+  45% {
+    transform: translateX(100%) skewX(-10deg);
+  }
+  100% {
+    transform: translateX(100%) skewX(-10deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aurora-gradient,
+  .floating-orb,
+  .shine-border::after,
+  .shimmer::after {
+    animation: none !important;
+  }
+}
