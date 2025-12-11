@@ -124,6 +124,55 @@ def probe_video_duration(file_path):
         return None
 
 
+def clamp_moments_to_duration(moments, target_seconds):
+    """Ensure the total duration of selected moments stays close to the requested target."""
+    if not moments or target_seconds <= 0:
+        return moments
+
+    allowed_overrun = max(4.0, target_seconds * 0.12)
+    hard_limit = target_seconds + allowed_overrun
+    total = 0.0
+    limited = []
+
+    for moment in moments:
+        start = float(moment.get('start', 0.0))
+        end = float(moment.get('end', start))
+        duration = max(1.0, end - start)
+
+        if total >= hard_limit:
+            break
+
+        remaining_to_target = max(target_seconds - total, 0.0)
+        if total + duration <= hard_limit and (remaining_to_target - duration) >= -allowed_overrun:
+            limited.append(moment)
+            total += duration
+            if total >= target_seconds:
+                break
+        else:
+            remaining = max(remaining_to_target, 0.0)
+            if remaining <= 0.5:
+                break
+            clipped_end = start + remaining
+            trimmed = moment.copy()
+            trimmed['end'] = clipped_end
+            trimmed['duration'] = f"{max(1, int(round(clipped_end - start)))}s"
+            limited.append(trimmed)
+            total += remaining
+            break
+
+    if not limited and moments:
+        first = moments[0]
+        start = float(first.get('start', 0.0))
+        end = float(first.get('end', start))
+        duration = max(1.0, min(target_seconds, end - start))
+        trimmed = first.copy()
+        trimmed['end'] = start + duration
+        trimmed['duration'] = f"{max(1, int(round(duration)))}s"
+        limited.append(trimmed)
+
+    return limited
+
+
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
@@ -327,6 +376,9 @@ def process_videos():
             logger.error("Unable to detect or generate any clips for this session.")
             session_data['status'] = 'error'
             return jsonify({'error': 'Impossible de générer un clip automatiquement. Réessaie avec d’autres vidéos.'}), 500
+
+        target_seconds = max(10.0, float(output_duration))
+        top_moments = clamp_moments_to_duration(top_moments, target_seconds)
         
         # Update session
         session_data['downloaded_files'] = downloaded_files

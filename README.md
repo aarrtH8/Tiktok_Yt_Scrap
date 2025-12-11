@@ -1,280 +1,132 @@
-# 🎬 YouTube to TikTok Video Compiler
+# 🎬 YouTube → TikTok AI Compiler
 
-[![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
-[![Next.js](https://img.shields.io/badge/Next.js-14-black.svg)](https://nextjs.org/)
-[![Flask](https://img.shields.io/badge/Flask-3.0-green.svg)](https://flask.palletsprojects.com/)
+[![Python](https://img.shields.io/badge/Python-3.12-blue.svg)](https://www.python.org/)
+[![Next.js](https://img.shields.io/badge/Next.js-16-black.svg)](https://nextjs.org/)
+[![CI](https://github.com/arthh/Tiktok_Yt_Scrap/actions/workflows/ci.yml/badge.svg)](https://github.com/arthh/Tiktok_Yt_Scrap/actions/workflows/ci.yml)
 
-Application web complète pour créer des compilations vidéo au format TikTok (9:16) à partir de vidéos YouTube.
-
-## ✨ Fonctionnalités principales
-
-- 🎥 **Téléchargement YouTube** : Télécharge automatiquement les vidéos depuis n'importe quel lien YouTube
-- 🤖 **Détection intelligente** : Analyse automatique des vidéos pour identifier les meilleurs moments
-  - Détection de changements de scène avec FFmpeg
-  - Analyse de l'énergie audio pour trouver les moments dynamiques
-  - Système de scoring pour sélectionner les clips les plus engageants
-- 📱 **Format TikTok** : Conversion automatique en format vertical 9:16
-- ⚙️ **Qualité ajustable** : Support de plusieurs résolutions (480p, 720p, 1080p)
-- ⏱️ **Durée personnalisable** : Choisissez la durée finale de votre compilation (15-180 secondes)
-- 💾 **Compilation automatique** : Assemble les clips avec des transitions fluides
-- 🎨 **Interface moderne** : UI élégante avec mode sombre/clair
-
-## 🏗️ Architecture
-
-Le projet est divisé en deux parties :
-
-### Backend (Python + Flask)
-- **Serveur API REST** pour le traitement vidéo
-- **yt-dlp** pour le téléchargement YouTube
-- **FFmpeg** pour l'analyse et le traitement vidéo
-- **Détection intelligente** des meilleurs moments
-
-### Frontend (Next.js + React)
-- **Interface utilisateur moderne** avec Tailwind CSS
-- **Composants réactifs** pour une expérience fluide
-- **Communication API** avec le backend Flask
-
-## 🚀 Démarrage rapide
-
-### Prérequis
-
-- Node.js 18+
-- Python 3.8+
-- FFmpeg (le script `install_ffmpeg.sh` peut l'installer pour toi)
-- Si Node.js n'est pas disponible, exécute `./install_node.sh` pour installer une version locale
-
-### Installation
-
-1. **Cloner le projet**
-```bash
-git clone <votre-repo>
-cd youtube-tiktok-compiler
-```
-
-2. **Lancer le backend**
-```bash
-cd backend
-pip install -r requirements.txt
-python server.py
-```
-
-Le backend démarre sur `http://localhost:5000`
-
-3. **Lancer le frontend** (nouveau terminal)
-```bash
-npm install
-npm run dev
-```
-
-Le frontend démarre sur `http://localhost:3000`
-
-4. **Accéder à l'application**
-```
-http://localhost:3000
-```
-
-📖 **Pour un guide détaillé**, consultez [DEMARRAGE.md](DEMARRAGE.md)
-
-## 📁 Structure du projet
-
-```
-.
-├── backend/                    # Backend Python Flask
-│   ├── server.py              # API REST principale
-│   ├── youtube_downloader.py  # Téléchargement YouTube
-│   ├── moment_detector.py     # Détection des meilleurs moments
-│   ├── video_processor.py     # Traitement et compilation vidéo
-│   ├── test_backend.py        # Tests du backend
-│   ├── requirements.txt       # Dépendances Python
-│   └── README.md             # Documentation backend
-│
-├── app/                       # Frontend Next.js
-│   ├── page.tsx              # Page principale
-│   ├── layout.tsx            # Layout de l'app
-│   └── globals.css           # Styles globaux
-│
-├── components/               # Composants React
-│   ├── header.tsx           # En-tête
-│   ├── url-input.tsx        # Input pour URLs YouTube
-│   ├── video-preview.tsx    # Prévisualisation des vidéos
-│   ├── compilation-settings.tsx  # Paramètres de compilation
-│   ├── processing-interface.tsx  # Interface de traitement
-│   └── ui/                  # Composants UI shadcn
-│
-├── lib/                     # Utilitaires
-│   ├── config.ts           # Configuration API
-│   └── utils.ts            # Fonctions utilitaires
-│
-├── .env.local              # Variables d'environnement
-├── DEMARRAGE.md            # Guide de démarrage détaillé
-└── README.md               # Ce fichier
-```
-
-## 🎯 Comment ça marche ?
-
-1. **Ajout de vidéos** : L'utilisateur colle des liens YouTube
-2. **Détection** : Le backend télécharge et analyse les vidéos
-3. **Sélection** : L'algorithme identifie les meilleurs moments
-4. **Compilation** : Les clips sont assemblés en format vertical TikTok
-5. **Téléchargement** : L'utilisateur récupère la vidéo finale
-
-### Algorithme de détection
-
-Le système utilise plusieurs techniques :
-
-- **Détection de scènes** : FFmpeg identifie les changements de plans
-- **Analyse audio** : Détection des moments à haute énergie
-- **Scoring combiné** : Les deux méthodes sont combinées pour un score
-- **Sélection intelligente** : Les meilleurs clips sont choisis selon le score
-
-### Format TikTok
-
-Les vidéos sont automatiquement :
-- Converties en ratio 9:16 (vertical)
-- Croppées intelligemment sur le centre de l'action
-- Encodées en H.264 pour une compatibilité maximale
-- Optimisées pour la taille et la qualité
-
-### Installer FFmpeg rapidement
-
-Si FFmpeg n'est pas installé sur ta machine, tu peux télécharger un binaire statique local via :
-
-```bash
-./install_ffmpeg.sh
-```
-
-Le binaire est placé dans `.ffmpeg/bin` et sera automatiquement pris en compte par `run_app.sh`. Tu peux aussi l'ajouter à ton `PATH` manuellement si besoin.
-
-### Installer Node.js rapidement
-
-En l'absence de Node.js 18+, lance simplement :
-
-```bash
-./install_node.sh
-```
-
-Une version récente de Node.js est installée dans `.node/runtime/bin` et le script `run_app.sh` l'utilisera automatiquement.
-
-## 🔧 API Endpoints
-
-### `GET /health`
-Vérification de l'état du serveur
-
-### `POST /api/detect-video`
-Détection des vidéos YouTube
-```json
-{
-  "urls": ["https://youtube.com/watch?v=..."]
-}
-```
-
-### `POST /api/process-video`
-Traitement et détection des moments
-```json
-{
-  "videos": [...],
-  "settings": {
-    "duration": 30,
-    "quality": "720p",
-    "autoDetect": true
-  }
-}
-```
-
-### `POST /api/download-video`
-Téléchargement de la compilation finale
-```json
-{
-  "sessionId": "uuid",
-  "quality": "720p"
-}
-```
-
-## 🧪 Tests
-
-Pour tester le backend :
-
-```bash
-cd backend
-python test_backend.py
-```
-
-Le script teste :
-- ✅ Health check
-- ✅ Détection de vidéo
-- ✅ Workflow complet (optionnel)
-
-## 🐛 Dépannage
-
-### Le backend ne démarre pas
-- Vérifiez que Python 3.8+ est installé
-- Installez les dépendances : `pip install -r requirements.txt`
-- Vérifiez que FFmpeg est installé : `ffmpeg -version`
-
-### Erreur de téléchargement YouTube
-- Mettez à jour yt-dlp : `pip install yt-dlp --upgrade`
-- Utilisez des vidéos publiques sans restrictions
-
-### Le frontend ne se connecte pas
-- Vérifiez que le backend tourne sur le port 5000
-- Vérifiez le fichier `.env.local`
-- Consultez la console du navigateur (F12)
-
-Pour plus de détails, consultez [DEMARRAGE.md](DEMARRAGE.md)
-
-## 📊 Technologies utilisées
-
-### Backend
-- **Flask** - Framework web Python
-- **yt-dlp** - Téléchargement YouTube
-- **FFmpeg** - Traitement vidéo
-- **NumPy** - Calculs numériques
-
-### Frontend
-- **Next.js 14** - Framework React
-- **React** - Bibliothèque UI
-- **Tailwind CSS** - Framework CSS
-- **shadcn/ui** - Composants UI
-
-## ⚖️ Mentions légales
-
-⚠️ **Important** : Cette application est fournie à des fins éducatives uniquement.
-
-- Respectez les conditions d'utilisation de YouTube
-- N'utilisez que du contenu dont vous avez les droits
-- Vérifiez les droits d'auteur avant toute monétisation
-- Cette application ne doit pas être utilisée pour violer les droits d'auteur
-
-## 🔮 Améliorations futures
-
-- [ ] Support de plus de plateformes (Vimeo, Dailymotion)
-- [ ] Ajout automatique de sous-titres
-- [ ] Effets et filtres vidéo personnalisés
-- [ ] File d'attente pour traiter plusieurs compilations
-- [ ] Système d'authentification utilisateur
-- [ ] Stockage cloud des vidéos
-- [ ] Preview vidéo en temps réel
-- [ ] Export direct vers TikTok/Instagram
-- [ ] Analyse des tendances pour suggestions
-- [ ] API publique pour développeurs
-
-## 📝 Licence
-
-Ce projet est sous licence MIT - voir le fichier LICENSE pour plus de détails.
-
-## 🤝 Contribution
-
-Les contributions sont les bienvenues ! N'hésitez pas à :
-- Ouvrir une issue pour signaler un bug
-- Proposer de nouvelles fonctionnalités
-- Soumettre une pull request
-
-## 📧 Contact
-
-Pour toute question ou suggestion, n'hésitez pas à ouvrir une issue.
+Application full-stack (Flask + Next.js) qui transforme automatiquement vos URLs YouTube/TikTok en compilations verticales optimisées pour TikTok, Reels et Shorts. L’IA détecte les moments forts, recadre les vidéos en 9:16, ajoute les sous-titres et exporte un MP4 prêt à publier.
 
 ---
 
-**Créé avec ❤️ pour les créateurs de contenu**
+## ✨ Fonctionnalités principales
 
-🎬 Transformez vos vidéos YouTube en contenu TikTok viral ! 🚀
+- 🎥 **Détection automatique des clips** : scènes + énergie audio + scoring pondéré (avec fallback intelligent).
+- 📱 **Conversion verticale** : recadrage adaptatif, smart focus, sous-titres incrustés et transitions lissées.
+- ⚙️ **Paramètres avancés** : durée cible, qualité (480p → 1080p), sous-titres activables, multiples clips.
+- 🎛️ **UI temps réel** : pipeline détaillé (analyse → download → highlights → rendu → export) avec journal live.
+- ⏲️ **Durée respectée** : clamp dynamique pour rester proche de la durée demandée, même en cas de clips longs.
+- 🧠 **Résilience** : retry sans sous-titres lors des erreurs 429/Too Many Requests, fallback par clip complet si besoin.
+
+---
+
+## 🏗️ Architecture
+
+| Couche | Tech | Rôle |
+| --- | --- | --- |
+| Front | Next.js 16 / Tailwind / shadcn/ui | Interface, gestion d’état, pipeline visuel, téléchargement |
+| API | Flask 3 / Python 3.12 | Endpoints `/detect-video`, `/process-video`, `/download-video`, session management |
+| Traitement | yt-dlp, FFmpeg, NumPy, OpenCV | Téléchargement, détection de scènes/audio, rendu vertical, concat |
+
+---
+
+## 🚀 Lancement rapide
+
+### 1. Prérequis
+- Node.js 20.9+ (ou `./install_node.sh`)
+- Python 3.12 + pip
+- FFmpeg (ou `./install_ffmpeg.sh`)
+
+### 2. Installation
+```bash
+git clone https://github.com/arthh/Tiktok_Yt_Scrap.git
+cd Tiktok_Yt_Scrap
+./run_app.sh
+```
+`run_app.sh` détecte automatiquement les versions locales (Node/FFmpeg), lance Flask (http://localhost:5000) + Next (http://localhost:3000) et surveille les logs (`.devlogs`).
+
+Pour les installations manuelles, voir [DEMARRAGE.md](DEMARRAGE.md).
+
+---
+
+## 📁 Structure
+
+```
+.
+├── app/                      # Frontend Next.js (page.tsx, layout, styles)
+├── backend/
+│   ├── server.py             # API Flask + orchestration sessions
+│   ├── youtube_downloader.py # yt-dlp + retries sous-titres
+│   ├── moment_detector.py    # scènes/audio scoring
+│   └── video_processor.py    # extraction FFmpeg, rendu 9:16, concat
+├── components/               # UI React (Input, Preview, Settings, Processing)
+├── .github/workflows/ci.yml  # CI (build Next + compile backend)
+├── install_ffmpeg.sh         # FFmpeg local
+├── install_node.sh           # Node.js local
+├── run_app.sh                # Lance backend + frontend + health checks
+├── DEMARRAGE.md              # Guide complet
+└── README.md                 # (ce fichier)
+```
+
+---
+
+## ⚙️ API rapide
+
+| Endpoint | Description |
+| --- | --- |
+| `GET /health` | Vérifie FFmpeg + yt-dlp |
+| `POST /api/detect-video` | `{ "urls": ["..."] }` → métadonnées |
+| `POST /api/process-video` | Télécharge, détecte les moments, retourne `{ sessionId, moments }` |
+| `POST /api/download-video` | `{ sessionId, quality }` → MP4 généré |
+
+---
+
+## 🧪 Tests & CI
+
+### Tests locaux
+```bash
+cd backend
+python test_backend.py   # Health + detect + workflow (optionnel)
+```
+
+### CI/CD
+- GitHub Actions `ci.yml` (Node 20.17 + Python 3.12) : `npm ci && npm run lint && npm run build` puis `compileall backend`.
+- TODO: ajouter tests e2e (playwright) et tests backend automatisés.
+
+---
+
+## 🧭 Roadmap / Améliorations prévues
+
+| Type | Idée |
+| --- | --- |
+| 🔧 AI | ✅ Détection hybride scènes/audio<br>☑️ Ajuster pondération selon type de contenu<br>🔜 Fine-tuning via feedback utilisateur |
+| 📈 Rendu | ☑️ Estimation temps restant + ETA basée sur FFmpeg<br>☑️ Choix template transitions/callouts<br>🔜 Générer overlays dynamiques (typographie, emojis) |
+| 🌐 Plateformes | 🔜 Import TikTok/Reels direct<br>🔜 Export vers TikTok API / Buffer |
+| 💾 Infrastructure | ☑️ Clamp durée stricte (terminé)<br>☑️ Retry subtitle 429 (terminé)<br>🔜 File d’attente + workers<br>🔜 Stockage cloud (S3) + CDN |
+| 🧑‍💻 DevEx | ☑️ CI de base (build & syntax)<br>🔜 Tests e2e + coverage backend<br>🔜 Dockerisation complète |
+
+*Les éléments cochés sont livrés, ceux avec 🔜 sont prioritaires à court terme.*
+
+---
+
+## 🐛 Dépannage rapide
+
+| Problème | Solution |
+| --- | --- |
+| `Failed to process videos` | Voir `.devlogs/backend.log` ; souvent un throttling sous-titre → la relance sans sous-titres est automatique mais attendre quelques minutes peut aider. |
+| Durée export > demandée | Depuis 2025-12-07, un clamp stricte limite la compilation au temps cible + ~10 %. Vérifiez vos sources si ça dépasse encore. |
+| FFmpeg introuvable | `./install_ffmpeg.sh` puis relancer `./run_app.sh`. |
+| Port 5000 occupé | Arreter les vieux serveurs : `pkill -f server.py`. |
+
+Plus d’informations dans [DEMARRAGE.md](DEMARRAGE.md).
+
+---
+
+## 📜 Licence & Contribution
+
+- Licence MIT (voir `LICENSE`).
+- Issues & PRs bienvenues : merci de documenter les changements, de lancer `npm run lint` et `python -m compileall backend` avant la PR.
+
+---
+
+**Créé avec ❤️ pour accélérer la repurposition de contenu.**  
+Transformez vos longues interviews ou podcasts en shorts viraux en quelques clics ! 🚀
