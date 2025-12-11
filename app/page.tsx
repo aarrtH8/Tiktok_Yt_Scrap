@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Header from '@/components/header';
 import URLInput from '@/components/url-input';
 import VideoPreview from '@/components/video-preview';
@@ -35,6 +35,8 @@ export default function Home() {
   const [error, setError] = useState('');
   const [sessionId, setSessionId] = useState(''); // New state to store sessionId
   const [compiledVideoUrl, setCompiledVideoUrl] = useState('');
+  const progressPollRef = useRef<NodeJS.Timeout | null>(null);
+  const [tiktokCaption, setTiktokCaption] = useState('');
 
   useEffect(() => {
     return () => {
@@ -57,6 +59,25 @@ export default function Home() {
     }),
     []
   );
+
+  const mapServerStageToProcessing = (stageLabel?: string, status?: string): ProcessingStage => {
+    if (status === 'ready') return 'completed';
+    if (status === 'error') return 'error';
+    const normalized = stageLabel?.toLowerCase() ?? '';
+    if (normalized.includes('téléchargement')) return 'download';
+    if (normalized.includes('analyse')) return 'highlights';
+    if (normalized.includes('prêt')) return 'render';
+    if (normalized.includes('compilation en cours')) return 'finalize';
+    if (normalized.includes('compilation terminée')) return 'completed';
+    if (normalized.includes('initial')) return 'detect';
+    return 'detect';
+  };
+
+  const taskStageMap: Record<string, ProcessingStage> = {
+    download: 'download',
+    analyze: 'highlights',
+    compile: 'finalize',
+  };
 
   useEffect(() => {
     if (processingStage === 'idle') return;
@@ -122,24 +143,14 @@ export default function Home() {
       setProcessingProgress(0);
       setActivityLog([]);
       setProcessingStage('detect');
+      setBestMoments([]);
+      setSessionId('');
+      setTiktokCaption('');
       if (compiledVideoUrl) {
         URL.revokeObjectURL(compiledVideoUrl);
         setCompiledVideoUrl('');
       }
 
-      // Simulate progress
-      const progressInterval = setInterval(() => {
-        setProcessingProgress(prev => {
-          const nextValue = Math.min(prev + Math.random() * 18, 95);
-          const inferred = deriveStageFromProgress(nextValue);
-          setProcessingStage(prevStage =>
-            prevStage === inferred ? prevStage : inferred
-          );
-          return nextValue;
-        });
-      }, 400);
-
-      // Call video processing API
       const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
       const response = await fetch(`${API_URL}/api/process-video`, {
         method: 'POST',
@@ -147,21 +158,15 @@ export default function Home() {
         body: JSON.stringify({ videos, settings }),
       });
 
-      clearInterval(progressInterval);
-
       if (!response.ok) {
         throw new Error('Failed to process videos');
       }
 
-      setProcessingStage('finalize');
-
       const data = await response.json();
-      setBestMoments(data.moments);
-      setProcessingProgress(100);
-      setProcessingStage('completed');
-      setIsProcessing(false);
-      setStep('preview');
-      setSessionId(data.sessionId); // Store sessionId from process response
+      if (!data?.sessionId) {
+        throw new Error('Session non initialisée');
+      }
+      setSessionId(data.sessionId);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Error processing videos');
       console.error('[v0] Processing error:', err);
@@ -170,6 +175,81 @@ export default function Home() {
       setProcessingStage('error');
     }
   };
+
+  useEffect(() => {
+    if (!sessionId || !isProcessing) {
+      if (progressPollRef.current) {
+        clearInterval(progressPollRef.current);
+        progressPollRef.current = null;
+      }
+      return;
+    }
+
+    const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+    let cancelled = false;
+
+    const fetchProgress = async () => {
+      try {
+        const response = await fetch(`${API_URL}/api/progress/${sessionId}`);
+        if (!response.ok) {
+          throw new Error('Failed to fetch progress');
+        }
+        const data = await response.json();
+        if (cancelled) return;
+
+        if (typeof data.progress === 'number') {
+          setProcessingProgress(data.progress);
+        }
+
+        const nextStage = mapServerStageToProcessing(data.stage, data.status);
+        setProcessingStage(prev => (nextStage ? nextStage : prev));
+
+        if (Array.isArray(data.tasks) && data.tasks.length) {
+          const logEntries = data.tasks
+            .filter(task => task.status !== 'pending')
+            .map(task => ({
+              stage: taskStageMap[task.id] || 'detect',
+              label: `${task.label}${task.detail ? ` · ${task.detail}` : ''}`,
+              timestamp: new Date().toLocaleTimeString(),
+            }));
+          if (logEntries.length) {
+            setActivityLog(logEntries.slice(-7));
+          }
+        }
+
+        if (data.tiktokCaption) {
+          setTiktokCaption(data.tiktokCaption);
+        }
+
+        if (data.status === 'ready') {
+          setBestMoments(data.moments || []);
+          setProcessingProgress(100);
+          setProcessingStage('completed');
+          setIsProcessing(false);
+          setStep('preview');
+        } else if (data.status === 'error') {
+          setError(data.error || 'Erreur pendant la compilation.');
+          setProcessingStage('error');
+          setIsProcessing(false);
+          setStep('input');
+        }
+      } catch (err) {
+        if (!cancelled) {
+          console.error('[v0] Progress polling error:', err);
+        }
+      }
+    };
+
+    fetchProgress();
+    const intervalId = setInterval(fetchProgress, 2000);
+    progressPollRef.current = intervalId;
+
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+      progressPollRef.current = null;
+    };
+  }, [sessionId, isProcessing]);
 
   const handleDownload = async (quality: string) => {
     try {
@@ -466,7 +546,7 @@ export default function Home() {
                         activityLog={activityLog}
                       />
                     </div>
-                    <div className="rounded-xl border border-border bg-muted/40 p-6">
+                    <div className="rounded-xl border border-border bg-muted/40 p-6 space-y-4">
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div>
                           <h3 className="text-lg font-semibold">Résultat final</h3>
@@ -480,7 +560,7 @@ export default function Home() {
                           </span>
                         )}
                       </div>
-                      <div className="mt-4 rounded-xl border border-border bg-black/80 p-2">
+                      <div className="rounded-xl border border-border bg-black/80 p-2">
                         {compiledVideoUrl ? (
                           <video
                             key={compiledVideoUrl}
@@ -506,6 +586,28 @@ export default function Home() {
                           </div>
                         )}
                       </div>
+                      {tiktokCaption && (
+                        <div className="rounded-xl border border-border bg-background/70 p-4">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <p className="text-sm font-semibold text-foreground">Description TikTok suggérée</p>
+                              <p className="text-xs text-muted-foreground">
+                                Copie-la et ajoute tes hashtags favoris avant publication.
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => navigator.clipboard?.writeText(tiktokCaption).catch(() => undefined)}
+                              className="rounded-full border border-border/60 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-primary transition hover:border-primary/50 hover:text-primary/80"
+                            >
+                              Copier
+                            </button>
+                          </div>
+                          <pre className="mt-3 whitespace-pre-wrap rounded-2xl bg-muted/40 p-3 text-sm text-muted-foreground">
+                            {tiktokCaption}
+                          </pre>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}

@@ -1,4 +1,5 @@
-import { Sparkles, Zap } from 'lucide-react';
+import { Moon, Sparkles, Sun, Zap } from 'lucide-react';
+import ThemeToggle from './theme-toggle';
 
 export default function Header() {
   return (
@@ -34,6 +35,7 @@ export default function Header() {
           <button className="rounded-full bg-gradient-to-r from-primary to-accent px-5 py-2 text-xs font-semibold uppercase tracking-wide text-primary-foreground shadow-lg shadow-primary/40 transition hover:opacity-90">
             Lancer l’atelier
           </button>
+          <ThemeToggle />
         </div>
       </div>
     </header>

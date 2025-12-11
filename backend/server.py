@@ -15,7 +15,9 @@ import tempfile
 import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
+from threading import Thread
 from typing import Optional, Dict, Any
+import re
 
 # Import custom modules
 from video_processor import VideoProcessor
@@ -174,6 +176,41 @@ def clamp_moments_to_duration(moments, target_seconds):
     return limited
 
 
+def slugify_hashtag(text: str) -> Optional[str]:
+    if not text:
+        return None
+    cleaned = re.sub(r'[^a-z0-9]+', '', text.lower())
+    if not cleaned:
+        return None
+    return f"#{cleaned[:24]}"
+
+
+def generate_tiktok_caption(videos, moments, target_duration):
+    video_titles = [v.get('title', '') for v in videos if v.get('title')]
+    moment_titles = [m.get('title', '') for m in moments if m.get('title')]
+    main_title = video_titles[0] if video_titles else "Compilation TikTok"
+    duration_line = f"{int(target_duration)}s de punchlines." if target_duration else "Moments forts compressés."
+    moment_line = ""
+    if moment_titles:
+        moment_line = "Moments: " + ", ".join(moment_titles[:3])
+
+    hashtags = ['#tiktok', '#shorts', '#reels']
+    derived_tags = []
+    for source in video_titles[:2] + moment_titles[:2]:
+        tag = slugify_hashtag(source)
+        if tag and tag not in derived_tags:
+            derived_tags.append(tag)
+    hashtags.extend(derived_tags)
+
+    caption_parts = [
+        f"{main_title} — {duration_line}",
+    ]
+    if moment_line:
+        caption_parts.append(moment_line)
+    caption_parts.append(" ".join(hashtags))
+    return "\n\n".join(caption_parts)
+
+
 def _calc_eta(start_time: datetime, percent: float) -> Optional[int]:
     if not start_time or percent <= 0 or percent >= 100:
         return None
@@ -242,6 +279,186 @@ def _set_stage(session_id: str, stage: str):
         return
     session['stage'] = stage
     sessions[session_id] = session
+
+
+def _run_processing(session_id, videos, settings, output_duration, auto_detect, include_subtitles):
+    """Background processing to keep the API responsive and allow progress polling."""
+    try:
+        session = sessions.get(session_id)
+        if not session:
+            return
+
+        downloaded_files = [None] * len(videos)
+        subtitle_files = [None] * len(videos)
+        video_durations = [0.0] * len(videos)
+        processed_indexes = []
+        all_moments = []
+
+        sessions[session_id]['downloaded_files'] = downloaded_files
+        sessions[session_id]['subtitle_files'] = subtitle_files
+        sessions[session_id]['video_durations'] = video_durations
+
+        _set_stage(session_id, 'Téléchargement des vidéos')
+        _update_task(session_id, 'download', status='in_progress', detail='Préparation des téléchargements')
+        download_start = datetime.now()
+        downloaded_totals = [0] * len(videos)
+        total_bytes_list: list[Optional[int]] = [None] * len(videos)
+
+        for idx, video in enumerate(videos):
+            try:
+                video_id = video['id']
+                video_url = video['url']
+                logger.info(f"Downloading video {idx + 1}/{len(videos)}: {video['title']}")
+
+                def progress_cb(downloaded, total):
+                    downloaded_totals[idx] = downloaded or 0
+                    if total:
+                        total_bytes_list[idx] = total
+                    total_downloaded = sum(downloaded_totals)
+                    total_expected = sum([t for t in total_bytes_list if t]) or None
+                    if total_expected:
+                        pct = min(99.0, (total_downloaded / total_expected) * 100)
+                        detail = f"{total_downloaded/1_000_000:.1f} Mo / {total_expected/1_000_000:.1f} Mo"
+                    else:
+                        pct = min(99.0, (downloaded or 0) / ((total or 1)) * 100)
+                        detail = f"{total_downloaded/1_000_000:.1f} Mo téléchargés"
+                    eta = _calc_eta(download_start, pct)
+                    _update_task(session_id, 'download', progress=pct, detail=detail, extra={'etaSeconds': eta})
+
+                video_path, subtitle_path = youtube_downloader.download_video(
+                    video_url,
+                    session_id,
+                    video_id,
+                    download_subtitles=include_subtitles,
+                    progress_callback=progress_cb
+                )
+                downloaded_files[idx] = video_path
+                subtitle_files[idx] = subtitle_path
+                processed_indexes.append(idx)
+                actual_duration = (
+                    probe_video_duration(video_path)
+                    or float(video.get('duration') or 0)
+                )
+                if not actual_duration or actual_duration <= 0:
+                    actual_duration = 30.0
+                video_durations[idx] = actual_duration
+            except Exception as exc:
+                logger.error(f"Error downloading video {video.get('title', idx)}: {exc}")
+                continue
+
+        _update_task(session_id, 'download', status='done', progress=100, detail='Téléchargement terminé', extra={'etaSeconds': 0})
+
+        _set_stage(session_id, 'Analyse des moments')
+        _update_task(session_id, 'analyze', status='in_progress', detail='Analyse en cours')
+        analyze_start = datetime.now()
+
+        for idx, video in enumerate(videos):
+            video_path = downloaded_files[idx]
+            if not video_path:
+                continue
+            try:
+                logger.info(f"Analyzing video {idx + 1}/{len(videos)}: {video['title']}")
+                scene_times = moment_detector.detect_scene_changes(video_path)
+                if auto_detect:
+                    moments = moment_detector.detect_moments(
+                        video_path,
+                        video_durations[idx],
+                        output_duration // len(videos),
+                        video['title'],
+                        scene_times
+                    )
+                else:
+                    moments = moment_detector.distribute_moments(
+                        video_durations[idx],
+                        output_duration // len(videos),
+                        video['title']
+                    )
+
+                for moment in moments:
+                    moment['videoId'] = video['id']
+                    moment['videoIndex'] = idx
+                    moment['videoTitle'] = video['title']
+
+                all_moments.extend(moments)
+
+                progress = ((idx + 1) / max(1, len(videos))) * 100
+                detail = f"{len(moments)} clips détectés sur {video['title']}"
+                _update_task(
+                    session_id,
+                    'analyze',
+                    progress=progress,
+                    detail=detail,
+                    extra={'etaSeconds': _calc_eta(analyze_start, progress)}
+                )
+            except Exception as exc:
+                logger.error(f"Error processing video {video['title']}: {exc}")
+                continue
+
+        _update_task(session_id, 'analyze', status='done', progress=100, detail='Analyse terminée', extra={'etaSeconds': 0})
+
+        clip_duration = 4.5
+        target_clip_count = max(1, int(output_duration / clip_duration))
+        top_moments = sorted(
+            all_moments,
+            key=lambda x: (-x['score'], x.get('start', 0.0))
+        )[:target_clip_count]
+
+        if not top_moments and processed_indexes:
+            logger.warning("No moments detected; generating fallback clips from raw videos.")
+            fallback_count = len(processed_indexes)
+            slice_duration = max(6, int(output_duration / max(1, fallback_count)))
+            fallback_moments = []
+            for idx in processed_indexes:
+                video = videos[idx]
+                video_title = video.get('title', f'Clip {idx + 1}')
+                video_duration = max(video_durations[idx], slice_duration)
+                end_time = min(video_duration, slice_duration)
+                if end_time <= 0:
+                    continue
+                fallback_moments.append({
+                    'start': 0.0,
+                    'end': end_time,
+                    'timestamp': "0:00",
+                    'duration': f"{int(end_time)}s",
+                    'title': f"Extrait principal · {video_title}",
+                    'score': 0.6,
+                    'engagementLevel': 'Medium',
+                    'videoId': video.get('id', ''),
+                    'videoIndex': idx,
+                    'videoTitle': video_title
+                })
+            top_moments = fallback_moments
+        if not top_moments:
+            raise RuntimeError("Unable to detect or generate any clips for this session.")
+
+        target_seconds = max(10.0, float(output_duration))
+        top_moments = clamp_moments_to_duration(top_moments, target_seconds)
+
+        session_data = sessions.get(session_id, {})
+        session_data['downloaded_files'] = downloaded_files
+        session_data['moments'] = top_moments
+        session_data['status'] = 'ready'
+        session_data['subtitle_files'] = subtitle_files
+        session_data['video_durations'] = video_durations
+        session_data['videoCount'] = len(videos)
+        session_data['clipCount'] = len(top_moments)
+        session_data['totalDuration'] = output_duration
+        session_data['stage'] = 'Prêt pour compilation'
+        session_data['etaTotalSeconds'] = 0
+        session_data['tiktok_caption'] = generate_tiktok_caption(videos, top_moments, output_duration)
+        sessions[session_id] = session_data
+        _update_task(session_id, 'compile', detail='Clique sur Télécharger pour lancer la compilation')
+
+        logger.info(f"Session {session_id} ready with {len(top_moments)} moments")
+    except Exception as exc:
+        logger.error(f"Error in background processing: {exc}", exc_info=True)
+        session = sessions.get(session_id)
+        if session:
+            session['status'] = 'error'
+            session['error'] = str(exc)
+            session['stage'] = 'Erreur'
+            session['progress'] = 0
+            sessions[session_id] = session
 
 
 @app.route('/health', methods=['GET'])
@@ -331,196 +548,19 @@ def process_videos():
         
         logger.info(f"Processing {len(videos)} videos for {output_duration}s compilation")
 
-        session_id, session_data = _init_session(videos, settings)
-        downloaded_files = [None] * len(videos)
-        subtitle_files = [None] * len(videos)
-        video_durations = [0.0] * len(videos)
-        processed_indexes = []
+        session_id, _ = _init_session(videos, settings)
 
-        session_data['downloaded_files'] = downloaded_files
-        session_data['subtitle_files'] = subtitle_files
-        session_data['video_durations'] = video_durations
-        sessions[session_id] = session_data
+        processing_thread = Thread(
+            target=_run_processing,
+            args=(session_id, videos, settings, output_duration, auto_detect, include_subtitles),
+            daemon=True
+        )
+        processing_thread.start()
 
-        # Download videos with progress tracking
-        all_moments = []
-        _set_stage(session_id, 'Téléchargement des vidéos')
-        _update_task(session_id, 'download', status='in_progress', detail='Préparation des téléchargements')
-        download_start = datetime.now()
-        downloaded_totals = [0] * len(videos)
-        total_bytes_list: list[Optional[int]] = [None] * len(videos)
-
-        for idx, video in enumerate(videos):
-            try:
-                video_id = video['id']
-                video_url = video['url']
-                logger.info(f"Downloading video {idx + 1}/{len(videos)}: {video['title']}")
-
-                def progress_cb(downloaded, total):
-                    downloaded_totals[idx] = downloaded or 0
-                    if total:
-                        total_bytes_list[idx] = total
-                    total_downloaded = sum(downloaded_totals)
-                    total_expected = sum([t for t in total_bytes_list if t]) or None
-                    if total_expected:
-                        pct = min(99.0, (total_downloaded / total_expected) * 100)
-                        detail = f"{total_downloaded/1_000_000:.1f} Mo / {total_expected/1_000_000:.1f} Mo"
-                    else:
-                        pct = min(99.0, (downloaded or 0) / ((total or 1)) * 100)
-                        detail = f"{total_downloaded/1_000_000:.1f} Mo téléchargés"
-                    eta = _calc_eta(download_start, pct)
-                    _update_task(session_id, 'download', progress=pct, detail=detail, extra={'etaSeconds': eta})
-
-                video_path, subtitle_path = youtube_downloader.download_video(
-                    video_url,
-                    session_id,
-                    video_id,
-                    download_subtitles=include_subtitles,
-                    progress_callback=progress_cb
-                )
-                downloaded_files[idx] = video_path
-                subtitle_files[idx] = subtitle_path
-                processed_indexes.append(idx)
-                actual_duration = (
-                    probe_video_duration(video_path)
-                    or float(video.get('duration') or 0)
-                )
-                if not actual_duration or actual_duration <= 0:
-                    actual_duration = 30.0
-                video_durations[idx] = actual_duration
-
-            except Exception as e:
-                logger.error(f"Error downloading video {video['title']}: {e}")
-                continue
-
-        _update_task(session_id, 'download', status='done', progress=100, detail='Téléchargement terminé', extra={'etaSeconds': 0})
-
-        # Detect moments
-        _set_stage(session_id, 'Analyse des moments')
-        _update_task(session_id, 'analyze', status='in_progress', detail='Analyse en cours')
-        analyze_start = datetime.now()
-
-        for idx, video in enumerate(videos):
-            video_path = downloaded_files[idx]
-            if not video_path:
-                continue
-            try:
-                logger.info(f"Analyzing video {idx + 1}/{len(videos)}: {video['title']}")
-                scene_times = moment_detector.detect_scene_changes(video_path)
-                if auto_detect:
-                    moments = moment_detector.detect_moments(
-                        video_path,
-                        video_durations[idx],
-                        output_duration // len(videos),
-                        video['title'],
-                        scene_times
-                    )
-                else:
-                    moments = moment_detector.distribute_moments(
-                        video_durations[idx],
-                        output_duration // len(videos),
-                        video['title']
-                    )
-
-                for moment in moments:
-                    moment['videoId'] = video['id']
-                    moment['videoIndex'] = idx
-                    moment['videoTitle'] = video['title']
-
-                all_moments.extend(moments)
-                progress = ((idx + 1) / max(1, len(videos))) * 100
-                detail = f"{len(moments)} clips détectés sur {video['title']}"
-                _update_task(
-                    session_id,
-                    'analyze',
-                    progress=progress,
-                    detail=detail,
-                    extra={'etaSeconds': _calc_eta(analyze_start, progress)}
-                )
-            except Exception as e:
-                logger.error(f"Error processing video {video['title']}: {e}")
-                continue
-
-        _update_task(session_id, 'analyze', status='done', progress=100, detail='Analyse terminée', extra={'etaSeconds': 0})
-
-        # Sort moments by score and select best ones, keeping the strongest clips first
-        clip_duration = 4.5
-        target_clip_count = max(1, int(output_duration / clip_duration))
-        top_moments = sorted(
-            all_moments,
-            key=lambda x: (-x['score'], x.get('start', 0.0))
-        )[:target_clip_count]
-
-        if not top_moments and processed_indexes:
-            logger.warning("No moments detected; generating fallback clips from raw videos.")
-            fallback_count = len(processed_indexes)
-            slice_duration = max(6, int(output_duration / max(1, fallback_count)))
-            fallback_moments = []
-            for idx in processed_indexes:
-                video = videos[idx]
-                video_title = video.get('title', f'Clip {idx + 1}')
-                video_duration = max(video_durations[idx], slice_duration)
-                end_time = min(video_duration, slice_duration)
-                if end_time <= 0:
-                    continue
-                minutes = 0
-                seconds = 0
-                fallback_moments.append({
-                    'start': 0.0,
-                    'end': end_time,
-                    'timestamp': f"{minutes}:{seconds:02d}",
-                    'duration': f"{int(end_time)}s",
-                    'title': f"Extrait principal · {video_title}",
-                    'score': 0.6,
-                    'engagementLevel': 'Medium',
-                    'videoId': video.get('id', ''),
-                    'videoIndex': idx,
-                    'videoTitle': video_title
-                })
-            top_moments = fallback_moments
-        if not top_moments:
-            logger.error("Unable to detect or generate any clips for this session.")
-            session_data['status'] = 'error'
-            return jsonify({'error': 'Impossible de générer un clip automatiquement. Réessaie avec d’autres vidéos.'}), 500
-
-        target_seconds = max(10.0, float(output_duration))
-        top_moments = clamp_moments_to_duration(top_moments, target_seconds)
-        
-        # Update session
-        session_data['downloaded_files'] = downloaded_files
-        session_data['moments'] = top_moments
-        session_data['status'] = 'ready'
-        session_data['subtitle_files'] = subtitle_files
-        session_data['video_durations'] = video_durations
-        session_data['videoCount'] = len(videos)
-        session_data['clipCount'] = len(top_moments)
-        session_data['totalDuration'] = output_duration
-        _set_stage(session_id, 'Prêt pour compilation')
-        _update_task(session_id, 'compile', detail='Clique sur Télécharger pour lancer la compilation')
-        
-        logger.info(f"Session {session_id} ready with {len(top_moments)} moments")
-        
-        # Return moments for preview (without file paths)
-        moments_preview = [
-            {
-                'order': idx + 1,
-                'timestamp': moment['timestamp'],
-                'duration': moment['duration'],
-                'title': moment['title'],
-                'score': moment['score'],
-                'engagementLevel': moment.get('engagementLevel', 'Medium'),
-                'videoTitle': moment['videoTitle']
-            }
-            for idx, moment in enumerate(top_moments)
-        ]
-        
         return jsonify({
             'success': True,
             'sessionId': session_id,
-            'moments': moments_preview,
-            'videoCount': len(videos),
-            'clipCount': len(top_moments),
-            'totalDuration': output_duration
+            'status': 'processing'
         })
     
     except Exception as e:
@@ -542,6 +582,7 @@ def get_progress(session_id):
         'tasks': session.get('tasks', []),
         'error': session.get('error'),
         'etaTotalSeconds': session.get('etaTotalSeconds'),
+        'tiktokCaption': session.get('tiktok_caption'),
     }
 
     if session.get('status') == 'ready':
@@ -562,6 +603,7 @@ def get_progress(session_id):
             'videoCount': session.get('videoCount', len(session.get('videos', []))),
             'clipCount': session.get('clipCount'),
             'totalDuration': session.get('totalDuration'),
+            'tiktokCaption': session.get('tiktok_caption'),
         })
 
     return jsonify(response)
