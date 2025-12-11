@@ -6,6 +6,7 @@ import URLInput from '@/components/url-input';
 import VideoPreview from '@/components/video-preview';
 import CompilationSettings from '@/components/compilation-settings';
 import ProcessingInterface from '@/components/processing-interface';
+import AnimatedBackground from '@/components/animated-background';
 
 type ProcessingStage =
   | 'idle'
@@ -270,67 +271,108 @@ export default function Home() {
   ];
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    <div className="relative min-h-screen overflow-hidden bg-gradient-to-b from-slate-950 via-background to-background text-foreground">
+      <AnimatedBackground />
       <Header />
 
-      <main className="px-4 py-8">
+      <main className="mx-auto w-full max-w-6xl px-4 pb-16 pt-10 sm:pt-16">
         {error && (
-          <div className="mx-auto mb-6 max-w-6xl rounded-2xl border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
+          <div className="mx-auto mb-6 max-w-4xl rounded-3xl border border-destructive/40 bg-destructive/15 p-4 text-sm text-destructive shadow-lg shadow-destructive/20 backdrop-blur">
             {error}
           </div>
         )}
 
-        <section className="mx-auto max-w-6xl space-y-8">
-          <div className="rounded-3xl border border-border/40 bg-gradient-to-br from-primary/15 via-primary/5 to-transparent p-8 shadow-lg">
-            <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
-              <div className="space-y-4">
-                <span className="inline-flex items-center rounded-full border border-primary/40 px-3 py-1 text-xs font-medium uppercase tracking-wide text-primary">
-                  Studio IA · Beta
-                </span>
-                <div>
-                  <h1 className="text-3xl font-semibold sm:text-4xl">
-                    Automatise ta compilation courte en quelques minutes.
+        <section className="space-y-10">
+          <div className="glass-panel shine-border relative overflow-hidden rounded-[32px] border border-white/10 p-8 shadow-2xl">
+            <div className="absolute inset-x-0 top-0 h-32 bg-gradient-to-br from-primary/30 via-transparent to-transparent opacity-60 blur-3xl" />
+
+            <div className="grid gap-10 lg:grid-cols-[1.6fr,1fr]">
+              <div className="space-y-6">
+                <div className="flex flex-wrap items-center gap-3 text-xs font-semibold uppercase tracking-[0.3em] text-muted-foreground">
+                  <span className="rounded-full border border-white/20 px-3 py-1 text-[10px] text-white/80">
+                    Studio IA
+                  </span>
+                  <span className="flex items-center gap-2 rounded-full border border-emerald-400/30 px-3 py-1 text-[10px] text-emerald-300">
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
+                    Monitoring en direct
+                  </span>
+                </div>
+                <div className="space-y-4">
+                  <h1 className="text-3xl font-semibold leading-tight text-white sm:text-4xl">
+                    Automatise ta compilation courte avec une{' '}
+                    <span className="text-transparent bg-gradient-to-r from-sky-300 via-primary-foreground/90 to-fuchsia-300 bg-clip-text">
+                      expérience ultra fluide
+                    </span>
+                    .
                   </h1>
-                  <p className="mt-3 text-base text-muted-foreground">
-                    Colle des liens YouTube, choisis la durée idéale et laisse l&rsquo;IA détecter
-                    les moments forts, ajouter les sous-titres et exporter un fichier prêt pour
-                    TikTok.
+                  <p className="text-base text-white/70">
+                    Colle tes URLs, règle la durée et laisse l’IA détecter les moments forts, incruster
+                    les sous-titres et exporter un master 9:16 prêt pour TikTok, Reels et Shorts.
                   </p>
                 </div>
-                <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                  <span className="rounded-full border border-border/60 px-3 py-1">
-                    Gestion multi-clips
-                  </span>
-                  <span className="rounded-full border border-border/60 px-3 py-1">
-                    Sous-titres optionnels
-                  </span>
-                  <span className="rounded-full border border-border/60 px-3 py-1">
-                    Formats TikTok / Reels
-                  </span>
+                <div className="flex flex-wrap gap-2 text-xs text-white/80">
+                  {['Gestion multi-clips', 'Sous-titres optionnels', 'Templates verticales'].map(label => (
+                    <span
+                      key={label}
+                      className="rounded-full border border-white/15 px-3 py-1 backdrop-blur"
+                    >
+                      {label}
+                    </span>
+                  ))}
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-3">
+                  {statCards.map(card => (
+                    <div
+                      key={card.label}
+                      className="relative overflow-hidden rounded-2xl border border-white/10 bg-white/5 p-4 text-white/80 shadow-lg shadow-primary/5 transition hover:-translate-y-1 hover:border-primary/40"
+                    >
+                      <p className="text-[11px] uppercase tracking-wide text-white/60">{card.label}</p>
+                      <p className="mt-2 text-2xl font-semibold text-white">{card.value || '0'}</p>
+                      <p className="text-xs text-white/70">{card.helper}</p>
+                    </div>
+                  ))}
                 </div>
               </div>
-              <div className="rounded-2xl border border-border bg-card/70 p-4 text-sm text-muted-foreground lg:max-w-sm">
-                <p className="font-medium text-foreground">Comment ça marche ?</p>
-                <ol className="mt-3 space-y-2">
-                  <li>1. Importer les liens et vérifier les miniatures.</li>
-                  <li>2. Sélectionner les réglages (durée, sous-titres, template).</li>
-                  <li>3. Lancer la compilation puis télécharger l&rsquo;export final.</li>
-                </ol>
-              </div>
-            </div>
-            <div className="mt-8 grid gap-4 sm:grid-cols-3">
-              {statCards.map(card => (
-                <div
-                  key={card.label}
-                  className="rounded-2xl border border-border/60 bg-background/60 p-4"
-                >
-                  <p className="text-xs uppercase tracking-wide text-muted-foreground">
-                    {card.label}
+
+              <div className="glass-panel relative rounded-[28px] border border-white/10 p-6 shadow-2xl">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold uppercase tracking-[0.4em] text-white/60">
+                    Pipeline
                   </p>
-                  <p className="mt-2 text-2xl font-semibold">{card.value || '0'}</p>
-                  <p className="text-xs text-muted-foreground">{card.helper}</p>
+                  <div className="flex items-center gap-2 rounded-full bg-emerald-500/10 px-3 py-1 text-xs text-emerald-300">
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
+                    {processingStage === 'completed' ? 'Prêt à exporter' : 'Actif'}
+                  </div>
                 </div>
-              ))}
+                <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-4">
+                  <p className="text-sm font-medium text-white">{stageDetails[step]?.title}</p>
+                  <p className="text-xs text-white/70">{stageDetails[step]?.description}</p>
+                  <div className="mt-4 h-2 w-full overflow-hidden rounded-full bg-white/10">
+                    <div
+                      className="h-full rounded-full bg-gradient-to-r from-primary via-sky-300 to-fuchsia-400 transition-all"
+                      style={{ width: `${Math.max(12, processingProgress)}%` }}
+                    />
+                  </div>
+                </div>
+                <div className="mt-6 space-y-4">
+                  {activityLog.length > 0 ? (
+                    activityLog.map(item => (
+                      <div
+                        key={`${item.stage}-${item.timestamp}`}
+                        className="flex items-center justify-between rounded-2xl border border-white/5 bg-white/5 px-3 py-2 text-xs text-white/70"
+                      >
+                        <span>{item.label}</span>
+                        <span className="text-white/50">{item.timestamp}</span>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-xs text-white/60">
+                      Les étapes en cours s’afficheront ici dès que la compilation sera lancée.
+                    </p>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
 
@@ -343,52 +385,45 @@ export default function Home() {
               return (
                 <div
                   key={stageKey}
-                  className={`rounded-2xl border p-4 ${
+                  className={`relative overflow-hidden rounded-3xl border p-5 transition ${
                     isActive
-                      ? 'border-primary bg-primary/5'
-                      : 'border-border bg-card/80'
+                      ? 'border-primary/40 bg-white/10 shadow-xl shadow-primary/20'
+                      : 'border-white/10 bg-white/5'
                   }`}
                 >
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="font-medium uppercase tracking-wide text-muted-foreground">
-                      Étape {index + 1}
-                    </span>
+                  <div className="flex items-center justify-between text-[11px] uppercase tracking-[0.4em] text-white/50">
+                    <span>Étape {index + 1}</span>
                     <span
-                      className={`rounded-full px-2 py-0.5 ${
+                      className={`rounded-full px-2 py-0.5 text-[10px] ${
                         isComplete
-                          ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-200'
+                          ? 'bg-emerald-500/15 text-emerald-200'
                           : isActive
-                            ? 'bg-primary/10 text-primary'
-                            : 'bg-muted text-muted-foreground'
-                      } text-[10px]`}
+                            ? 'bg-primary/20 text-primary-foreground/80'
+                            : 'bg-white/10 text-white/60'
+                      }`}
                     >
-                      {isComplete ? 'OK' : isActive ? 'En cours' : 'À venir'}
+                      {isComplete ? 'Terminé' : isActive ? 'En cours' : 'À venir'}
                     </span>
                   </div>
-                  <p className="mt-3 text-base font-semibold">{stage.title}</p>
-                  <p className="text-sm text-muted-foreground">{stage.description}</p>
+                  <p className="mt-4 text-lg font-semibold text-white">{stage.title}</p>
+                  <p className="text-sm text-white/70">{stage.description}</p>
+                  <p className="mt-2 text-xs text-white/50">{stage.helper}</p>
                 </div>
               );
             })}
           </div>
         </section>
 
-        <section className="mx-auto mt-10 grid max-w-7xl gap-8 lg:grid-cols-[1.9fr,1fr]">
+        <section className="mt-12 grid gap-8 lg:grid-cols-[1.8fr,1fr]">
           <div className="space-y-6">
-            <div className="rounded-2xl border border-border bg-card/80 p-6 shadow-sm">
-              <div className="flex flex-wrap items-center justify-between gap-4 border-b border-border pb-4">
+            <div className="glass-panel rounded-[28px] border border-white/10 p-6 shadow-2xl">
+              <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/5 pb-5">
                 <div>
-                  <p className="text-xs uppercase tracking-wide text-muted-foreground">
-                    Workspace
-                  </p>
-                  <h2 className="text-xl font-semibold text-foreground">
-                    {stageDetails[step]?.title}
-                  </h2>
-                  <p className="text-sm text-muted-foreground">
-                    {stageDetails[step]?.helper}
-                  </p>
+                  <p className="text-xs uppercase tracking-[0.4em] text-white/50">Workspace</p>
+                  <h2 className="text-2xl font-semibold text-white">{stageDetails[step]?.title}</h2>
+                  <p className="text-sm text-white/70">{stageDetails[step]?.helper}</p>
                 </div>
-                <div className="rounded-full border border-border px-4 py-2 text-sm text-muted-foreground">
+                <div className="rounded-full border border-white/10 px-4 py-2 text-sm text-white/70">
                   {videos.length} clip{videos.length > 1 ? 's' : ''} importé
                   {videos.length > 1 ? 's' : ''}
                 </div>
@@ -479,13 +514,13 @@ export default function Home() {
           </div>
 
           <div className="space-y-6">
-            <div className="rounded-2xl border border-border bg-card/80 p-6 shadow-sm">
+            <div className="glass-panel rounded-[28px] border border-white/10 p-6 shadow-2xl">
               <div className="mb-6">
-                <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                <p className="text-xs uppercase tracking-[0.4em] text-white/60">
                   Paramètres du rendu
                 </p>
-                <h2 className="text-xl font-semibold">Compilation & export</h2>
-                <p className="text-sm text-muted-foreground">
+                <h2 className="text-xl font-semibold text-white">Compilation & export</h2>
+                <p className="text-sm text-white/70">
                   Personnalise la durée, le format et l&rsquo;ajout éventuel de sous-titres avant de
                   lancer le montage automatique.
                 </p>
@@ -496,9 +531,9 @@ export default function Home() {
                 isProcessing={isProcessing}
               />
             </div>
-            <div className="rounded-2xl border border-border bg-muted/40 p-5 text-sm text-muted-foreground">
-              <p className="text-xs uppercase tracking-wide">Pro tip</p>
-              <p className="mt-2">
+            <div className="glass-panel rounded-2xl border border-white/10 bg-gradient-to-br from-primary/10 via-white/5 to-transparent p-5 text-sm text-white/80 shadow-lg shadow-primary/10">
+              <p className="text-xs uppercase tracking-[0.4em] text-white/60">Pro tip</p>
+              <p className="mt-2 text-white/80">
                 Ajoute tes meilleurs mots-clés dans le titre final pour booster les vues une fois la
                 vidéo exportée. Nous gardons la session ouverte pendant 30 minutes pour permettre
                 plusieurs téléchargements.
