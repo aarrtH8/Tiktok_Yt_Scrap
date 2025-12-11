@@ -15,8 +15,12 @@ import tempfile
 import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
-from threading import Thread
+from threading import Thread, Lock
+from queue import Queue
 from typing import Optional, Dict, Any
+import hashlib
+import time
+import shutil
 import re
 
 # Import custom modules
@@ -65,14 +69,57 @@ def create_temp_root():
 TEMP_DIR = create_temp_root()
 SESSIONS_DIR = TEMP_DIR / "sessions"
 SESSIONS_DIR.mkdir(exist_ok=True)
+CACHE_DIR = TEMP_DIR / "cache"
+CACHE_DIR.mkdir(exist_ok=True)
+ANALYTICS_LOG = TEMP_DIR / "analytics.log"
+MAX_WORKERS = int(os.getenv('VIDEO_COMPILER_WORKERS', '2'))
+CACHE_TTL = int(os.getenv('VIDEO_CACHE_TTL', '1800'))
 
 # Session storage (in production, use Redis or database)
 sessions = {}
+cache_lock = Lock()
+download_cache: Dict[str, Dict[str, Any]] = {}
+processing_queue: "Queue[Dict[str, Any]]" = Queue()
 
 # Initialize processors
 video_processor = VideoProcessor(TEMP_DIR)
 youtube_downloader = YouTubeDownloader(TEMP_DIR)
 moment_detector = MomentDetector()
+
+
+def _processing_worker():
+    while True:
+        job = processing_queue.get()
+        if job is None:
+            processing_queue.task_done()
+            break
+        session_id = job.get('session_id')
+        if not session_id:
+            processing_queue.task_done()
+            continue
+        session = sessions.get(session_id)
+        if session:
+            _set_stage(session_id, 'En traitement')
+            session['status'] = 'processing'
+            session['queuePosition'] = 0
+            sessions[session_id] = session
+            _record_event(session_id, 'started', {'videos': len(job.get('videos', []))})
+            try:
+                _run_processing(
+                    session_id,
+                    job.get('videos', []),
+                    job.get('settings', {}),
+                    job.get('output_duration'),
+                    job.get('auto_detect', True),
+                    job.get('include_subtitles', True)
+                )
+            except Exception as exc:
+                logger.error(f"Worker error for session {session_id}: {exc}", exc_info=True)
+        processing_queue.task_done()
+
+
+for _ in range(max(1, MAX_WORKERS)):
+    Thread(target=_processing_worker, daemon=True).start()
 
 
 def cleanup_old_sessions():
@@ -98,6 +145,26 @@ def cleanup_old_sessions():
             logger.info(f"Cleaned up {len(expired_sessions)} expired sessions")
     except Exception as e:
         logger.error(f"Error in cleanup: {e}")
+    cleanup_download_cache()
+
+def cleanup_download_cache():
+    try:
+        now = time.time()
+        with cache_lock:
+            expired_keys = []
+            for url, entry in download_cache.items():
+                cache_path = entry.get('path')
+                if not cache_path or not os.path.exists(cache_path) or (now - entry.get('timestamp', 0) > CACHE_TTL):
+                    expired_keys.append(url)
+                    try:
+                        if cache_path and os.path.exists(cache_path):
+                            os.remove(cache_path)
+                    except Exception as exc:
+                        logger.warning(f"Failed to remove cached file {cache_path}: {exc}")
+            for key in expired_keys:
+                download_cache.pop(key, None)
+    except Exception as exc:
+        logger.warning(f"Error cleaning download cache: {exc}")
 
 
 def probe_video_duration(file_path):
@@ -281,12 +348,60 @@ def _set_stage(session_id: str, stage: str):
     sessions[session_id] = session
 
 
+def _record_event(session_id: str, event_type: str, payload: Optional[Dict[str, Any]] = None):
+    try:
+        event = {
+            'sessionId': session_id,
+            'type': event_type,
+            'timestamp': datetime.now().isoformat(),
+            'payload': payload or {}
+        }
+        ANALYTICS_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(ANALYTICS_LOG, 'a', encoding='utf-8') as log_handle:
+            log_handle.write(json.dumps(event, ensure_ascii=False) + '\n')
+    except Exception as exc:
+        logger.warning(f"Unable to write analytics event {event_type}: {exc}")
+
+
+def _get_cached_download(url: str):
+    with cache_lock:
+        entry = download_cache.get(url)
+        if not entry:
+            return None
+        cache_path = entry.get('path')
+        if not cache_path or not os.path.exists(cache_path):
+            download_cache.pop(url, None)
+            return None
+        if time.time() - entry.get('timestamp', 0) > CACHE_TTL:
+            try:
+                os.remove(cache_path)
+            except OSError:
+                pass
+            download_cache.pop(url, None)
+            return None
+        return cache_path
+
+
+def _store_cached_download(url: str, source_path: str):
+    try:
+        file_hash = hashlib.sha1(url.encode('utf-8')).hexdigest()
+        dest_path = CACHE_DIR / f"{file_hash}.mp4"
+        shutil.copy2(source_path, dest_path)
+        with cache_lock:
+            download_cache[url] = {'path': str(dest_path), 'timestamp': time.time()}
+    except Exception as exc:
+        logger.warning(f"Unable to cache video {url}: {exc}")
+
+
 def _run_processing(session_id, videos, settings, output_duration, auto_detect, include_subtitles):
     """Background processing to keep the API responsive and allow progress polling."""
     try:
         session = sessions.get(session_id)
         if not session:
             return
+        session['status'] = 'processing'
+        session['stage'] = 'Initialisation'
+        sessions[session_id] = session
 
         downloaded_files = [None] * len(videos)
         subtitle_files = [None] * len(videos)
@@ -299,6 +414,7 @@ def _run_processing(session_id, videos, settings, output_duration, auto_detect, 
         sessions[session_id]['video_durations'] = video_durations
 
         _set_stage(session_id, 'Téléchargement des vidéos')
+        _record_event(session_id, 'download_start')
         _update_task(session_id, 'download', status='in_progress', detail='Préparation des téléchargements')
         download_start = datetime.now()
         downloaded_totals = [0] * len(videos)
@@ -325,13 +441,24 @@ def _run_processing(session_id, videos, settings, output_duration, auto_detect, 
                     eta = _calc_eta(download_start, pct)
                     _update_task(session_id, 'download', progress=pct, detail=detail, extra={'etaSeconds': eta})
 
-                video_path, subtitle_path = youtube_downloader.download_video(
-                    video_url,
-                    session_id,
-                    video_id,
-                    download_subtitles=include_subtitles,
-                    progress_callback=progress_cb
-                )
+                use_cache = not include_subtitles
+                cached_path = _get_cached_download(video_url) if use_cache else None
+                if cached_path:
+                    session_video = SESSIONS_DIR / f"{session_id}_{video_id}_{idx}.mp4"
+                    shutil.copy2(cached_path, session_video)
+                    video_path = str(session_video)
+                    subtitle_path = None
+                    logger.info(f"Using cached download for {video['title']}")
+                else:
+                    video_path, subtitle_path = youtube_downloader.download_video(
+                        video_url,
+                        session_id,
+                        video_id,
+                        download_subtitles=include_subtitles,
+                        progress_callback=progress_cb
+                    )
+                    if use_cache and video_path:
+                        _store_cached_download(video_url, video_path)
                 downloaded_files[idx] = video_path
                 subtitle_files[idx] = subtitle_path
                 processed_indexes.append(idx)
@@ -347,8 +474,10 @@ def _run_processing(session_id, videos, settings, output_duration, auto_detect, 
                 continue
 
         _update_task(session_id, 'download', status='done', progress=100, detail='Téléchargement terminé', extra={'etaSeconds': 0})
+        _record_event(session_id, 'download_complete', {'videos': len(processed_indexes)})
 
         _set_stage(session_id, 'Analyse des moments')
+        _record_event(session_id, 'analysis_start')
         _update_task(session_id, 'analyze', status='in_progress', detail='Analyse en cours')
         analyze_start = datetime.now()
 
@@ -395,6 +524,7 @@ def _run_processing(session_id, videos, settings, output_duration, auto_detect, 
                 continue
 
         _update_task(session_id, 'analyze', status='done', progress=100, detail='Analyse terminée', extra={'etaSeconds': 0})
+        _record_event(session_id, 'analysis_complete', {'clips': len(all_moments)})
 
         clip_duration = 4.5
         target_clip_count = max(1, int(output_duration / clip_duration))
@@ -441,6 +571,9 @@ def _run_processing(session_id, videos, settings, output_duration, auto_detect, 
         session_data['subtitle_files'] = subtitle_files
         session_data['video_durations'] = video_durations
         session_data['videoCount'] = len(videos)
+        for idx, moment in enumerate(top_moments):
+            moment.setdefault('id', f"{session_id}-{uuid.uuid4().hex[:8]}-{idx}")
+
         session_data['clipCount'] = len(top_moments)
         session_data['totalDuration'] = output_duration
         session_data['stage'] = 'Prêt pour compilation'
@@ -450,6 +583,7 @@ def _run_processing(session_id, videos, settings, output_duration, auto_detect, 
         _update_task(session_id, 'compile', detail='Clique sur Télécharger pour lancer la compilation')
 
         logger.info(f"Session {session_id} ready with {len(top_moments)} moments")
+        _record_event(session_id, 'ready', {'clips': len(top_moments)})
     except Exception as exc:
         logger.error(f"Error in background processing: {exc}", exc_info=True)
         session = sessions.get(session_id)
@@ -459,6 +593,7 @@ def _run_processing(session_id, videos, settings, output_duration, auto_detect, 
             session['stage'] = 'Erreur'
             session['progress'] = 0
             sessions[session_id] = session
+        _record_event(session_id, 'error', {'message': str(exc)})
 
 
 @app.route('/health', methods=['GET'])
@@ -548,19 +683,29 @@ def process_videos():
         
         logger.info(f"Processing {len(videos)} videos for {output_duration}s compilation")
 
-        session_id, _ = _init_session(videos, settings)
+        session_id, session_data = _init_session(videos, settings)
+        session_data['status'] = 'queued'
+        session_data['stage'] = 'En file d’attente'
+        session_data['queuePosition'] = processing_queue.qsize() + 1
+        sessions[session_id] = session_data
 
-        processing_thread = Thread(
-            target=_run_processing,
-            args=(session_id, videos, settings, output_duration, auto_detect, include_subtitles),
-            daemon=True
-        )
-        processing_thread.start()
+        job = {
+            'session_id': session_id,
+            'videos': videos,
+            'settings': settings,
+            'output_duration': output_duration,
+            'auto_detect': auto_detect,
+            'include_subtitles': include_subtitles
+        }
+        processing_queue.put(job)
+        queue_position = processing_queue.qsize()
+        _record_event(session_id, 'queued', {'position': queue_position})
 
         return jsonify({
             'success': True,
             'sessionId': session_id,
-            'status': 'processing'
+            'status': 'queued',
+            'queuePosition': queue_position
         })
     
     except Exception as e:
@@ -582,6 +727,7 @@ def get_progress(session_id):
         'tasks': session.get('tasks', []),
         'error': session.get('error'),
         'etaTotalSeconds': session.get('etaTotalSeconds'),
+        'queuePosition': session.get('queuePosition', 0),
         'tiktokCaption': session.get('tiktok_caption'),
     }
 
@@ -589,6 +735,7 @@ def get_progress(session_id):
         moments_preview = [
             {
                 'order': idx + 1,
+                'id': moment.get('id'),
                 'timestamp': moment['timestamp'],
                 'duration': moment['duration'],
                 'title': moment['title'],
@@ -668,7 +815,9 @@ def download_video():
                     'file_path': file_path,
                     'start': start,
                     'end': end,
-                    'subtitle_path': subtitle_path
+                    'subtitle_path': subtitle_path,
+                    'title': moment.get('title'),
+                    'videoTitle': moment.get('videoTitle')
                 })
         
         # Compile video in TikTok format (9:16)
@@ -685,6 +834,7 @@ def download_video():
         logger.info(f"Video compilation complete: {output_path}")
         _update_task(session_id, 'compile', status='done', progress=100, detail='Compilation terminée', extra={'etaSeconds': 0})
         _set_stage(session_id, 'Compilation terminée')
+        _record_event(session_id, 'compiled', {'clips': len(clips)})
         
         # Send file and cleanup
         response = send_file(
@@ -724,6 +874,72 @@ def download_video():
     except Exception as e:
         logger.error(f"Error in download_video: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/sessions/<session_id>/moments', methods=['PATCH'])
+def update_session_moments(session_id):
+    """Reorder or filter session moments before compilation."""
+    try:
+        session_data = sessions.get(session_id)
+        if not session_data:
+            return jsonify({'error': 'Session not found'}), 404
+
+        if session_data.get('status') != 'ready':
+            return jsonify({'error': 'Session not ready for editing'}), 400
+
+        data = request.get_json() or {}
+        desired_order = data.get('order', [])
+        if not isinstance(desired_order, list) or not desired_order:
+            return jsonify({'error': 'Order must be a non-empty list of moment IDs'}), 400
+
+        id_to_moment = {moment.get('id'): moment for moment in session_data.get('moments', [])}
+        new_moments = []
+        for moment_id in desired_order:
+            moment = id_to_moment.get(moment_id)
+            if moment:
+                new_moments.append(moment)
+
+        if not new_moments:
+            return jsonify({'error': 'Aucun moment valide envoyé'}), 400
+
+        # Reassign sequential order to help UI display
+        for idx, moment in enumerate(new_moments):
+            moment['order'] = idx + 1
+
+        session_data['moments'] = new_moments
+        session_data['clipCount'] = len(new_moments)
+        session_data['tiktok_caption'] = generate_tiktok_caption(
+            session_data.get('videos', []),
+            new_moments,
+            session_data.get('totalDuration')
+        )
+
+        sessions[session_id] = session_data
+
+        moments_preview = [
+            {
+                'id': moment.get('id'),
+                'order': idx + 1,
+                'timestamp': moment['timestamp'],
+                'duration': moment['duration'],
+                'title': moment['title'],
+                'score': moment['score'],
+                'engagementLevel': moment.get('engagementLevel', 'Medium'),
+                'videoTitle': moment['videoTitle']
+            }
+            for idx, moment in enumerate(new_moments)
+        ]
+
+        return jsonify({
+            'success': True,
+            'moments': moments_preview,
+            'clipCount': len(new_moments),
+            'tiktokCaption': session_data.get('tiktok_caption')
+        })
+
+    except Exception as exc:
+        logger.error(f"Error updating session moments: {exc}", exc_info=True)
+        return jsonify({'error': str(exc)}), 500
 
 
 @app.route('/api/sessions/<session_id>', methods=['DELETE'])

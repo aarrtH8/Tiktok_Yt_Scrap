@@ -7,6 +7,7 @@ import VideoPreview from '@/components/video-preview';
 import CompilationSettings from '@/components/compilation-settings';
 import ProcessingInterface from '@/components/processing-interface';
 import AnimatedBackground from '@/components/animated-background';
+import BestPracticesChecklist from '@/components/best-practices';
 
 type ProcessingStage =
   | 'idle'
@@ -30,13 +31,25 @@ export default function Home() {
   const [processingProgress, setProcessingProgress] = useState(0);
   const [processingStage, setProcessingStage] = useState<ProcessingStage>('idle');
   const [activityLog, setActivityLog] = useState<ActivityItem[]>([]);
-  const [bestMoments, setBestMoments] = useState([]);
+  const [bestMoments, setBestMoments] = useState<any[]>([]);
   const [step, setStep] = useState('input'); // input, processing, preview
   const [error, setError] = useState('');
   const [sessionId, setSessionId] = useState(''); // New state to store sessionId
   const [compiledVideoUrl, setCompiledVideoUrl] = useState('');
   const progressPollRef = useRef<NodeJS.Timeout | null>(null);
   const [tiktokCaption, setTiktokCaption] = useState('');
+  const [reviewMoments, setReviewMoments] = useState<any[]>([]);
+  const [hasReviewChanges, setHasReviewChanges] = useState(false);
+  const [isSavingReview, setIsSavingReview] = useState(false);
+  const [reviewError, setReviewError] = useState('');
+  const [settingsSnapshot, setSettingsSnapshot] = useState({
+    duration: '30',
+    autoDetect: true,
+    quality: '1080p',
+    includeSubtitles: true,
+  });
+  const [queuePosition, setQueuePosition] = useState<number | null>(null);
+  const [isQueued, setIsQueued] = useState(false);
 
   useEffect(() => {
     return () => {
@@ -61,6 +74,7 @@ export default function Home() {
   );
 
   const mapServerStageToProcessing = (stageLabel?: string, status?: string): ProcessingStage => {
+    if (status === 'queued') return 'detect';
     if (status === 'ready') return 'completed';
     if (status === 'error') return 'error';
     const normalized = stageLabel?.toLowerCase() ?? '';
@@ -108,6 +122,13 @@ export default function Home() {
     return 'finalize';
   };
 
+  useEffect(() => {
+    if (step === 'preview' && bestMoments.length) {
+      setReviewMoments(bestMoments.map(moment => ({ ...moment, enabled: true })));
+      setHasReviewChanges(false);
+    }
+  }, [bestMoments, step]);
+
 
   const handleAddVideos = async (urls: string[]) => {
     try {
@@ -146,6 +167,12 @@ export default function Home() {
       setBestMoments([]);
       setSessionId('');
       setTiktokCaption('');
+      setQueuePosition(null);
+      setIsQueued(true);
+      setReviewMoments([]);
+      setHasReviewChanges(false);
+      setReviewError('');
+      setSettingsSnapshot(settings);
       if (compiledVideoUrl) {
         URL.revokeObjectURL(compiledVideoUrl);
         setCompiledVideoUrl('');
@@ -201,6 +228,13 @@ export default function Home() {
           setProcessingProgress(data.progress);
         }
 
+        if (typeof data.queuePosition === 'number') {
+          setQueuePosition(data.queuePosition);
+        } else {
+          setQueuePosition(null);
+        }
+        setIsQueued(data.status === 'queued');
+
         const nextStage = mapServerStageToProcessing(data.stage, data.status);
         setProcessingStage(prev => (nextStage ? nextStage : prev));
 
@@ -222,12 +256,15 @@ export default function Home() {
         }
 
         if (data.status === 'ready') {
+          setIsQueued(false);
+          setQueuePosition(null);
           setBestMoments(data.moments || []);
           setProcessingProgress(100);
           setProcessingStage('completed');
           setIsProcessing(false);
           setStep('preview');
         } else if (data.status === 'error') {
+          setIsQueued(false);
           setError(data.error || 'Erreur pendant la compilation.');
           setProcessingStage('error');
           setIsProcessing(false);
@@ -250,6 +287,74 @@ export default function Home() {
       progressPollRef.current = null;
     };
   }, [sessionId, isProcessing]);
+
+  useEffect(() => {
+    if (step === 'preview' && bestMoments.length) {
+      setReviewMoments(bestMoments.map(moment => ({ ...moment, enabled: true })));
+      setHasReviewChanges(false);
+    }
+  }, [bestMoments, step]);
+
+  const moveReviewMoment = (id: string, direction: 'up' | 'down') => {
+    setReviewMoments(prev => {
+      const index = prev.findIndex(m => m.id === id);
+      if (index === -1) return prev;
+      const targetIndex = direction === 'up' ? index - 1 : index + 1;
+      if (targetIndex < 0 || targetIndex >= prev.length) return prev;
+      const updated = [...prev];
+      const [removed] = updated.splice(index, 1);
+      updated.splice(targetIndex, 0, removed);
+      setHasReviewChanges(true);
+      return updated;
+    });
+  };
+
+  const toggleReviewMoment = (id: string) => {
+    setReviewMoments(prev => {
+      const updated = prev.map(moment =>
+        moment.id === id ? { ...moment, enabled: !moment.enabled } : moment
+      );
+      setHasReviewChanges(true);
+      return updated;
+    });
+  };
+
+  const saveReviewOrder = async () => {
+    try {
+      setReviewError('');
+      const enabledIds = reviewMoments.filter(m => m.enabled).map(m => m.id);
+      if (!enabledIds.length) {
+        setReviewError('Sélectionne au moins un moment à conserver.');
+        return;
+      }
+      if (!sessionId) {
+        setReviewError('Session introuvable.');
+        return;
+      }
+      setIsSavingReview(true);
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+      const response = await fetch(`${API_URL}/api/sessions/${sessionId}/moments`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order: enabledIds }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || 'Impossible de sauvegarder l’ordre.');
+      }
+      const payload = await response.json();
+      setBestMoments(payload.moments ?? []);
+      setReviewMoments((payload.moments ?? []).map(moment => ({ ...moment, enabled: true })));
+      if (payload.tiktokCaption) {
+        setTiktokCaption(payload.tiktokCaption);
+      }
+      setHasReviewChanges(false);
+    } catch (err) {
+      setReviewError(err instanceof Error ? err.message : 'Erreur lors de la sauvegarde.');
+    } finally {
+      setIsSavingReview(false);
+    }
+  };
 
   const handleDownload = async (quality: string) => {
     try {
@@ -308,6 +413,8 @@ export default function Home() {
   };
 
   const canDownload = step === 'preview' && Boolean(sessionId);
+  const reviewComplete = step === 'preview' && reviewMoments.length > 0 && !hasReviewChanges;
+  const captionReady = Boolean(tiktokCaption);
 
   const stageDetails: Record<
     string,
@@ -526,6 +633,11 @@ export default function Home() {
 
                 {step === 'processing' && (
                   <div className="rounded-xl border border-border bg-background/70 p-4">
+                    {isQueued && queuePosition && (
+                      <div className="mb-4 rounded-xl border border-border/60 bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
+                        File en attente · position {queuePosition}. La compilation démarre automatiquement.
+                      </div>
+                    )}
                     <ProcessingInterface
                       progress={processingProgress}
                       moments={bestMoments}
@@ -586,8 +698,8 @@ export default function Home() {
                           </div>
                         )}
                       </div>
-                      {tiktokCaption && (
-                        <div className="rounded-xl border border-border bg-background/70 p-4">
+                    {tiktokCaption && (
+                      <div className="rounded-xl border border-border bg-background/70 p-4">
                           <div className="flex items-center justify-between">
                             <div>
                               <p className="text-sm font-semibold text-foreground">Description TikTok suggérée</p>
@@ -629,6 +741,7 @@ export default function Home() {
               </div>
               <CompilationSettings
                 onGenerate={handleGenerate}
+                onSettingsChange={setSettingsSnapshot}
                 videosCount={videos.length}
                 isProcessing={isProcessing}
               />
@@ -641,9 +754,81 @@ export default function Home() {
                 plusieurs téléchargements.
               </p>
             </div>
+            <BestPracticesChecklist
+              videosCount={videos.length}
+              settings={settingsSnapshot}
+              step={step}
+              reviewComplete={reviewComplete}
+              captionReady={captionReady}
+            />
           </div>
         </section>
       </main>
     </div>
   );
 }
+                    <div className="rounded-xl border border-border bg-muted/30 p-4">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h4 className="text-base font-semibold text-foreground">Moments sélectionnés</h4>
+                          <p className="text-sm text-muted-foreground">
+                            Réorganise ou masque des clips avant l’export final.
+                          </p>
+                        </div>
+                        <button
+                          onClick={saveReviewOrder}
+                          disabled={!hasReviewChanges || isSavingReview}
+                          className="rounded-full bg-primary/80 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-primary-foreground disabled:opacity-40"
+                        >
+                          {isSavingReview ? 'Sauvegarde...' : 'Sauvegarder l’ordre'}
+                        </button>
+                      </div>
+                      {reviewError && (
+                        <p className="mt-2 text-sm text-destructive">{reviewError}</p>
+                      )}
+                      <div className="mt-4 space-y-3">
+                        {reviewMoments.map((moment, index) => (
+                          <div
+                            key={moment.id || index}
+                            className={`flex items-center justify-between rounded-xl border px-3 py-2 text-sm ${
+                              moment.enabled
+                                ? 'border-border bg-background/80'
+                                : 'border-dashed border-border/60 bg-muted/30 text-muted-foreground'
+                            }`}
+                          >
+                            <div>
+                              <p className="text-base font-medium">{moment.title}</p>
+                              <p className="text-xs text-muted-foreground">
+                                #{index + 1} · {moment.duration} · {moment.videoTitle || 'Source'}
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => moveReviewMoment(moment.id, 'up')}
+                                disabled={index === 0}
+                                className="rounded-full border border-border/60 px-2 py-1 text-xs disabled:opacity-40"
+                              >
+                                ↑
+                              </button>
+                              <button
+                                onClick={() => moveReviewMoment(moment.id, 'down')}
+                                disabled={index === reviewMoments.length - 1}
+                                className="rounded-full border border-border/60 px-2 py-1 text-xs disabled:opacity-40"
+                              >
+                                ↓
+                              </button>
+                              <button
+                                onClick={() => toggleReviewMoment(moment.id)}
+                                className={`rounded-full border px-3 py-1 text-xs font-semibold ${
+                                  moment.enabled
+                                    ? 'border-destructive/50 text-destructive'
+                                    : 'border-emerald-400/50 text-emerald-400'
+                                }`}
+                              >
+                                {moment.enabled ? 'Masquer' : 'Restaurer'}
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>

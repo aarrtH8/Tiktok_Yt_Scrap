@@ -13,8 +13,15 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+try:
+    import cv2
+    HAS_CV2 = True
+except ImportError:
+    HAS_CV2 = False
 
 logger = logging.getLogger(__name__)
+DEFAULT_FONT = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
+DEFAULT_BOLD_FONT = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
 
 
 class VideoProcessor:
@@ -162,9 +169,7 @@ class VideoProcessor:
 
     def _estimate_focus_center(self, video_path, sample_frames=12):
         """Estimate the horizontal focus point to drive smart cropping"""
-        try:
-            import cv2
-        except ImportError:
+        if not HAS_CV2:
             logger.warning("OpenCV not installed; falling back to center crop")
             return 0.5
 
@@ -226,11 +231,86 @@ class VideoProcessor:
 
         median_focus = statistics.median(focus_points)
         return float(max(0.1, min(0.9, median_focus)))
+
+    def _detect_face_focus(self, video_path, sample_frames=12):
+        """Detect primary face horizontal center if possible."""
+        if not HAS_CV2:
+            return None
+        cascade_path = getattr(cv2.data, "haarcascades", None)
+        if not cascade_path:
+            return None
+        cascade_file = Path(cascade_path) / "haarcascade_frontalface_default.xml"
+        if not cascade_file.exists():
+            return None
+        cascade = cv2.CascadeClassifier(str(cascade_file))
+        if cascade.empty():
+            return None
+
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            return None
+
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+        target_samples = sample_frames if frame_count == 0 else min(sample_frames, frame_count)
+        step = max(frame_count // target_samples, 1) if frame_count else 1
+
+        detections = []
+        current = 0
+        while True:
+            if frame_count:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, current)
+            ret, frame = cap.read()
+            if not ret:
+                break
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = cascade.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=5, minSize=(60, 60))
+            if len(faces) > 0:
+                # Choose largest face (by area)
+                x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
+                center = (x + w / 2) / max(frame.shape[1], 1)
+                detections.append(float(center))
+            if len(detections) >= target_samples:
+                break
+            if frame_count:
+                current += step
+                if current >= frame_count:
+                    break
+
+        cap.release()
+
+        if not detections:
+            return None
+        median_face = statistics.median(detections)
+        return float(max(0.1, min(0.9, median_face)))
     
     def _create_work_dir(self):
         path = Path(tempfile.mkdtemp(prefix='session_', dir=str(self.temp_dir)))
         logger.debug(f"Created work directory {path}")
         return path
+
+    def _build_overlay_filter(self, width, height, overlay_info):
+        if not overlay_info:
+            return ""
+        title = (overlay_info.get('title') or 'Moment clé')[:48]
+        source = (overlay_info.get('source') or 'Source')[:42]
+        clip_index = overlay_info.get('index', 0)
+        total_clips = max(overlay_info.get('total', clip_index + 1), clip_index + 1)
+        progress_ratio = (clip_index + 1) / total_clips
+        progress_width = int((width - 160) * progress_ratio)
+        title = title.replace(":", "\\:").replace("'", r"\'")
+        source = source.replace(":", "\\:").replace("'", r"\'")
+
+        bold_font = DEFAULT_BOLD_FONT.replace(":", "\\:").replace("'", r"\'")
+        regular_font = DEFAULT_FONT.replace(":", "\\:").replace("'", r"\'")
+        overlay_parts = [
+            f"drawbox=x=40:y=40:w={width-80}:h=140:color=rgba(0,0,0,0.35):t=0,",
+            f"drawtext=text='{title}':x=70:y=70:fontcolor=white:fontsize=52:fontfile='{bold_font}',",
+            f"drawtext=text='{source}':x=70:y=122:fontcolor=rgba(255,255,255,0.75):fontsize=34:fontfile='{regular_font}',",
+            f"drawbox=x=60:y={height-160}:w={width-120}:h=26:color=rgba(255,255,255,0.18):t=0,",
+            f"drawbox=x=60:y={height-160}:w={progress_width}:h=26:color=rgba(99,102,241,0.85):t=0,",
+            f"drawtext=text='Clip {clip_index+1}/{total_clips}':x={width-320}:y={height-210}:fontcolor=rgba(255,255,255,0.8):fontsize=32:fontfile='{regular_font}'"
+        ]
+        return "".join(overlay_parts)
     
     def _write_concat_manifest(self, clips, manifest_path: Path):
         """Write a concat manifest with safety checks"""
@@ -289,7 +369,7 @@ class VideoProcessor:
             logger.error(f"Error extracting clip: {e}")
             raise
     
-    def convert_to_vertical(self, input_path, output_path, quality='720p', subtitle_path=None):
+    def convert_to_vertical(self, input_path, output_path, quality='720p', subtitle_path=None, overlay_info=None, clip_index=0, total_clips=1):
         """
         Convert video to vertical TikTok format (9:16)
         Applies smart cropping to focus on center/action and optionally burns subtitles
@@ -325,11 +405,15 @@ class VideoProcessor:
             focus_center = 0.5
             smart_crop_applied = False
 
+            face_focus = self._detect_face_focus(input_path) if src_width and src_height else None
+
             if src_width and src_height:
                 src_aspect = src_width / src_height if src_height else target_aspect
                 if src_aspect > target_aspect + 0.02:
                     # Wide video – build a parallax effect with a blurred background and a tightened foreground crop
                     focus_center = self._estimate_focus_center(input_path)
+                    if face_focus is not None:
+                        focus_center = 0.65 * focus_center + 0.35 * face_focus
 
                     # Background layer: fill the 9:16 frame, cropped around the focus point, with blur
                     scale_ratio = height / src_height
@@ -372,6 +456,16 @@ class VideoProcessor:
 
             if smart_crop_applied:
                 logger.info(f"Smart focus crop applied at {focus_center:.2f}")
+
+            overlay_filter = self._build_overlay_filter(width, height, {
+                'title': (overlay_info or {}).get('title'),
+                'source': (overlay_info or {}).get('source'),
+                'index': clip_index,
+                'total': total_clips
+            })
+
+            if overlay_filter:
+                filter_complex = f"{filter_complex},{overlay_filter}"
             
             cmd = [
                 'ffmpeg',
@@ -470,7 +564,8 @@ class VideoProcessor:
         work_dir = self._create_work_dir()
         temp_clips = []
         try:
-            logger.info(f"Compiling {len(clips_data)} clips into TikTok format")
+            total_clips = len(clips_data)
+            logger.info(f"Compiling {total_clips} clips into TikTok format")
             
             # Step 1: Extract and prepare clips
             for idx, clip_data in enumerate(clips_data):
@@ -494,11 +589,21 @@ class VideoProcessor:
                         work_dir
                     )
 
+                overlay_info = {
+                    'title': clip_data.get('title') or clip_data.get('label') or 'Moment clé',
+                    'source': clip_data.get('videoTitle') or 'Source',
+                    'index': idx,
+                    'total': total_clips
+                }
+
                 self.convert_to_vertical(
                     str(clip_path),
                     str(vertical_path),
                     quality,
-                    subtitle_path=sliced_subtitle
+                    subtitle_path=sliced_subtitle,
+                    overlay_info=overlay_info,
+                    clip_index=idx,
+                    total_clips=total_clips
                 )
                 
                 temp_clips.append(str(vertical_path))

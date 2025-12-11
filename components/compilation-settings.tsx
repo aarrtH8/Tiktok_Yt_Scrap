@@ -1,14 +1,73 @@
 'use client';
 
-import { useState } from 'react';
-import { Settings, Sparkles } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Settings, Sparkles, Wand2 } from 'lucide-react';
 
-export default function CompilationSettings({ onGenerate, videosCount, isProcessing }) {
+const TEMPLATES = [
+  {
+    id: 'default',
+    label: 'Standard',
+    description: 'Équilibre clips et sous-titres pour la majorité des contenus.',
+    duration: '30',
+    quality: '1080p',
+    includeSubtitles: true,
+  },
+  {
+    id: 'podcast',
+    label: 'Podcast punchy',
+    description: 'Clips plus longs, sous-titres activés, parfait pour interviews.',
+    duration: '60',
+    quality: '1080p',
+    includeSubtitles: true,
+  },
+  {
+    id: 'reaction',
+    label: 'Réaction rapide',
+    description: 'Clips courts, sous-titres facultatifs, idéal pour gaming.',
+    duration: '20',
+    quality: '720p',
+    includeSubtitles: false,
+  },
+];
+
+type SettingsState = {
+  duration: string;
+  autoDetect: boolean;
+  quality: string;
+  includeSubtitles: boolean;
+};
+
+type Props = {
+  onGenerate: (settings: SettingsState) => void;
+  onSettingsChange?: (settings: SettingsState) => void;
+  videosCount: number;
+  isProcessing: boolean;
+};
+
+export default function CompilationSettings({ onGenerate, onSettingsChange, videosCount, isProcessing }: Props) {
   const [duration, setDuration] = useState('30');
   const [autoDetect, setAutoDetect] = useState(true);
   const [quality, setQuality] = useState('1080p');
   const [includeSubtitles, setIncludeSubtitles] = useState(true);
+  const [selectedTemplate, setSelectedTemplate] = useState('default');
 
+  useEffect(() => {
+    onSettingsChange?.({
+      duration,
+      autoDetect,
+      quality,
+      includeSubtitles,
+    });
+  }, [duration, autoDetect, quality, includeSubtitles, onSettingsChange]);
+
+  const applyTemplate = templateId => {
+    const template = TEMPLATES.find(t => t.id === templateId);
+    if (!template) return;
+    setSelectedTemplate(templateId);
+    setDuration(template.duration);
+    setQuality(template.quality);
+    setIncludeSubtitles(template.includeSubtitles);
+  };
 
   const handleGenerate = () => {
     onGenerate({
@@ -25,6 +84,29 @@ export default function CompilationSettings({ onGenerate, videosCount, isProcess
         <div className="flex items-center gap-2">
           <Settings className="w-5 h-5 text-primary" />
           <h3 className="font-semibold">Settings</h3>
+        </div>
+
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <Wand2 className="w-4 h-4 text-accent" />
+            Templates IA
+          </div>
+          <div className="space-y-2">
+            {TEMPLATES.map(template => (
+              <button
+                key={template.id}
+                onClick={() => applyTemplate(template.id)}
+                className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
+                  selectedTemplate === template.id
+                    ? 'border-primary bg-primary/10'
+                    : 'border-border hover:border-primary/30'
+                }`}
+              >
+                <p className="text-sm font-semibold text-foreground">{template.label}</p>
+                <p className="text-xs text-muted-foreground">{template.description}</p>
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Duration Selector */}

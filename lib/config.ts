@@ -12,6 +12,7 @@ export const API_ENDPOINTS = {
   processVideo: `${API_BASE_URL}/api/process-video`,
   downloadVideo: `${API_BASE_URL}/api/download-video`,
   progress: (sessionId: string) => `${API_BASE_URL}/api/progress/${sessionId}`,
+  reorderMoments: (sessionId: string) => `${API_BASE_URL}/api/sessions/${sessionId}/moments`,
   deleteSession: (sessionId: string) => `${API_BASE_URL}/api/sessions/${sessionId}`,
 };
 
