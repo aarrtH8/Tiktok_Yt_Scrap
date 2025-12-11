@@ -722,6 +722,7 @@ def get_progress(session_id):
                 'videoTitle': moment['videoTitle'],
                 'filename': moment.get('filename'),
                 'id': moment.get('id', str(uuid.uuid4()))
+                'filename': moment.get('filename')
             }
             for idx, moment in enumerate(session.get('moments', []))
         ]
