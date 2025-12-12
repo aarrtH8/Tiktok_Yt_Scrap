@@ -1,69 +1,6 @@
-import {
-  CheckCircle,
-  Play,
-  Download,
-  Video,
-  Loader,
-  AlertTriangle,
-  Clock,
-} from 'lucide-react';
-import { useState } from 'react';
+import AudioVisualizer from '@/components/audio-visualizer';
 
-type ProcessingStage =
-  | 'idle'
-  | 'detect'
-  | 'download'
-  | 'highlights'
-  | 'render'
-  | 'finalize'
-  | 'completed'
-  | 'error';
-
-type ActivityItem = {
-  stage: ProcessingStage;
-  label: string;
-  timestamp: string;
-};
-
-type ProcessingProps = {
-  progress: number;
-  moments?: any[];
-  onDownload?: (quality: string) => Promise<void> | void;
-  stage?: ProcessingStage;
-  activityLog?: ActivityItem[];
-};
-
-const PROCESS_STEPS: Array<{
-  id: ProcessingStage;
-  label: string;
-  description: string;
-}> = [
-  {
-    id: 'detect',
-    label: 'Analyse',
-    description: 'Lecture des liens et récupération des métadonnées.',
-  },
-  {
-    id: 'download',
-    label: 'Téléchargement',
-    description: 'Récupération des fichiers sources en HD.',
-  },
-  {
-    id: 'highlights',
-    label: 'Moments forts',
-    description: 'Détection des séquences avec le plus d’engagement.',
-  },
-  {
-    id: 'render',
-    label: 'Rendu vertical',
-    description: 'Adaptation 9:16, sous-titres et transitions.',
-  },
-  {
-    id: 'finalize',
-    label: 'Assemblage',
-    description: 'Concaténation finale et préparation de l’export.',
-  },
-];
+// ... (existing imports)
 
 export default function ProcessingInterface({
   progress,
@@ -72,76 +9,27 @@ export default function ProcessingInterface({
   stage = 'idle',
   activityLog = [],
 }: ProcessingProps) {
-  const [isDownloading, setIsDownloading] = useState(false);
-  const [downloadProgress, setDownloadProgress] = useState(0);
-  const hasMoments = Array.isArray(moments) && moments.length > 0;
-  const showExportOptions = typeof onDownload === 'function';
-  const stageOrder = PROCESS_STEPS.map(step => step.id);
-  const stageIndex =
-    stage === 'completed'
-      ? PROCESS_STEPS.length
-      : Math.max(stageOrder.indexOf(stage), 0);
-  const isErrored = stage === 'error';
-  const currentStep =
-    PROCESS_STEPS.find(step => step.id === stage) ??
-    PROCESS_STEPS[PROCESS_STEPS.length - 1];
+  // ... (existing state)
 
-  const handleDownloadWithProgress = async (quality: string) => {
-    setIsDownloading(true);
-    setDownloadProgress(0);
+  // Show visualizer during active analysis phases
+  const showVisualizer = stage === 'detect' || stage === 'highlights' || stage === 'download';
 
-    try {
-      // Simulate progressive download
-      const downloadInterval = setInterval(() => {
-        setDownloadProgress(prev => {
-          if (prev >= 95) {
-            clearInterval(downloadInterval);
-            return 95;
-          }
-          return prev + Math.random() * 20;
-        });
-      }, 200);
-
-      await onDownload?.(quality);
-
-      clearInterval(downloadInterval);
-      setDownloadProgress(100);
-      
-      // Reset after completion
-      setTimeout(() => {
-        setIsDownloading(false);
-        setDownloadProgress(0);
-      }, 1000);
-    } catch (err) {
-      setIsDownloading(false);
-      setDownloadProgress(0);
-    }
-  };
-
-  const progressValue = isDownloading ? downloadProgress : progress;
-  const progressLabel = isDownloading
-    ? hasMoments
-      ? `Création du master final (${Math.min(
-          Math.ceil((downloadProgress / 100) * moments.length),
-          moments.length
-        )}/${moments.length})`
-      : 'Préparation de la vidéo...'
-    : isErrored
-    ? 'Une erreur est survenue. Consulte les détails et réessaie.'
-    : stage === 'completed'
-    ? 'Compilation terminée, prête à être téléchargée.'
-    : currentStep?.description ?? 'Préparation en cours...';
-
-  const barClassName = isErrored
-    ? 'h-full bg-destructive transition-all duration-300'
-    : 'h-full bg-gradient-to-r from-primary to-accent transition-all duration-300';
+  // ... (existing progress logic)
 
   return (
     <div className="space-y-6">
-      {/* Progress Bar */}
-      <div className="bg-card border border-border rounded-xl p-6">
-        <div className="mb-4">
+      {/* Progress Bar & Visualizer */}
+      <div className="bg-card border border-border rounded-xl p-6 relative overflow-hidden">
+        {/* Background Visualizer Overlay */}
+        {showVisualizer && (
+          <div className="absolute inset-0 z-0 pointer-events-none opacity-20">
+            <AudioVisualizer isActive={true} barCount={40} color="rgb(168, 85, 247)" />
+          </div>
+        )}
+
+        <div className="relative z-10 mb-4">
           <div className="flex items-center justify-between mb-2">
+  // ... (rest of the component)
             <h3 className="font-semibold">
               {isDownloading ? 'Download Progress' : 'Compilation Progress'}
             </h3>
@@ -180,13 +68,12 @@ export default function ProcessingInterface({
                   className="flex items-start gap-3 rounded-lg border border-border/70 p-3 bg-muted/40"
                 >
                   <div
-                    className={`mt-0.5 flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold ${
-                      isComplete
+                    className={`mt-0.5 flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold ${isComplete
                         ? 'bg-primary text-primary-foreground'
                         : isCurrent
-                        ? 'bg-accent text-accent-foreground'
-                        : 'bg-muted-foreground/20 text-muted-foreground'
-                    }`}
+                          ? 'bg-accent text-accent-foreground'
+                          : 'bg-muted-foreground/20 text-muted-foreground'
+                      }`}
                   >
                     {isComplete ? <CheckCircle className="w-4 h-4" /> : idx + 1}
                   </div>
