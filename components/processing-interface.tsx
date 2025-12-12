@@ -1,6 +1,14 @@
 import AudioVisualizer from '@/components/audio-visualizer';
 
-// ... (existing imports)
+import { Loader, AlertTriangle, CheckCircle, Clock, Video, Play, Download, Check } from 'lucide-react';
+
+interface ProcessingProps {
+  progress: number;
+  moments?: any[];
+  onDownload?: (quality: string) => void;
+  stage?: 'idle' | 'detect' | 'download' | 'highlights' | 'render' | 'finalize' | 'completed' | 'error';
+  activityLog?: any[];
+}
 
 export default function ProcessingInterface({
   progress,
@@ -14,7 +22,33 @@ export default function ProcessingInterface({
   // Show visualizer during active analysis phases
   const showVisualizer = stage === 'detect' || stage === 'highlights' || stage === 'download';
 
-  // ... (existing progress logic)
+  const isDownloading = stage === 'download';
+  const isErrored = stage === 'error';
+  const progressValue = progress;
+
+  const PROCESS_STEPS = [
+    { id: 'detect', label: 'Analysis', description: 'Parsing URL & Metadata' },
+    { id: 'download', label: 'Download', description: 'Fetching High-Res Source' },
+    { id: 'highlights', label: 'AI Detection', description: 'Finding Best Moments' },
+    { id: 'render', label: 'Processing', description: 'Cropping & Subtitling' },
+    { id: 'finalize', label: 'Compilation', description: 'Stitching Final Video' },
+  ];
+
+  const stageIndex = PROCESS_STEPS.findIndex(s => s.id === stage);
+  const progressLabel = stage === 'idle' ? 'Ready' : (PROCESS_STEPS[stageIndex]?.label || 'Processing...');
+  const hasMoments = moments.length > 0;
+
+  // Mock download progress for visualizer if not separate
+  const downloadProgress = isDownloading ? progress : 0;
+
+  const barClassName = `h-full transition-all duration-500 ease-out rounded-full ${isErrored ? 'bg-destructive' : 'bg-primary'
+    }`;
+
+  // Fix ReferenceError: define showExportOptions and handler
+  const showExportOptions = stage === 'completed';
+  const handleDownloadWithProgress = (quality: string) => {
+    if (onDownload) onDownload(quality);
+  };
 
   return (
     <div className="space-y-6">
@@ -69,10 +103,10 @@ export default function ProcessingInterface({
                 >
                   <div
                     className={`mt-0.5 flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold ${isComplete
-                        ? 'bg-primary text-primary-foreground'
-                        : isCurrent
-                          ? 'bg-accent text-accent-foreground'
-                          : 'bg-muted-foreground/20 text-muted-foreground'
+                      ? 'bg-primary text-primary-foreground'
+                      : isCurrent
+                        ? 'bg-accent text-accent-foreground'
+                        : 'bg-muted-foreground/20 text-muted-foreground'
                       }`}
                   >
                     {isComplete ? <CheckCircle className="w-4 h-4" /> : idx + 1}
