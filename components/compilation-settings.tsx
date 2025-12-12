@@ -154,7 +154,8 @@ export default function CompilationSettings({ onGenerate, videosCount, isProcess
           </label>
           <div className="grid grid-cols-2 gap-2">
             {[
-              { id: 'crop', label: 'Smart Crop', icon: '🔍', desc: 'Auto-detect active area' },
+              { id: 'smart', label: 'AI Face Track', icon: '🧠', desc: 'Active Speaker Tracking' },
+              { id: 'crop', label: 'Focus Crop', icon: '🔍', desc: 'Auto-detect active area' },
               { id: 'fit', label: 'Fit & Blur', icon: '📱', desc: 'No crop · Blurred margins' }
             ].map((option) => (
               <button

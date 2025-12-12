@@ -361,14 +361,14 @@ class VideoProcessor:
                     f"gblur=sigma=30,eq=brightness=-0.3[bg]"
                 )
                 
-                # Foreground: scale to width, maintain aspect ratio
+                # Foreground: scale to fit inside output box, maintaining aspect ratio
                 fg_chain = (
-                    f"[0:v]scale={width}:-1[fg]"
+                    f"[0:v]scale={width}:{height}:force_original_aspect_ratio=decrease[fg]"
                 )
                 
                 filter_complex = (
                     f"{bg_chain};{fg_chain};"
-                    f"[bg][fg]overlay=0:(H-h)/2"
+                    f"[bg][fg]overlay=(W-w)/2:(H-h)/2"
                     f"{subtitle_filter}{text_filter}[v]"
                 )
                 logger.info(f"Applying FIT & BLUR layout")
@@ -380,23 +380,79 @@ class VideoProcessor:
                 smart_crop_applied = False
 
                 if src_width and src_height:
-                    src_aspect = src_width / src_height if src_height else target_aspect
-                    if src_aspect > target_aspect + 0.02:
-                        # Wide video - Smart Crop
+                    # Calculate scaling to fill height
+                    h = src_height
+                    w = src_width
+                    scale_factor = height / h
+                    new_width = int(w * scale_factor)
+                    
+                    # Check for smart crop availability
+                    smart_x_expr = None
+                    if layout == 'smart':
+                        try:
+                            from backend.smart_cropper import SmartCropper
+                            # We need full path to the temporary clip source if possible, but here input_path is likely it
+                            cropper = SmartCropper()
+                            # Analyze original video to find face center relative to width
+                            # Then translate that to the scaled dimensions
+                            # But wait, we need to crop from the SCALED video.
+                            # FFmpeg filter: scale first, then crop.
+                            
+                            # Generate simple crop filter string parts
+                            # SmartCropper returns crop=w:h:x:y
+                            # We want to use the x-coordinate logic.
+                            
+                            # Let's trust SmartCropper to return a valid crop filter suffix if we give it dimensions
+                            # But SmartCropper currently takes video path. 
+                            # We will use input_path.
+                            
+                            crop_filter = cropper.generate_crop_filter(input_path, width, height)
+                            # crop_filter looks like "crop=1080:1920:x:y"
+                            # We need to apply this AFTER scaling to new_width:new_height (which is >= output size)
+                            # Actually, keeping it simple:
+                            # 1. Scale video so Height = 1920 (if w < 1080, we might have issues? usually landscape video is wide enough)
+                            # 2. Crop 1080x1920 from the center of focus.
+                            
+                            # Re-calculating scale to Ensure COVERAGE
+                            # If video is 16:9 (1920x1080), scaling to h=1920 makes w=3413.
+                            # We crop 1080 from 3413. Plenty of room to pan.
+                            
+                            # We need to pass the SCALED width to generating filter? 
+                            # No, SmartCropper analyzes relative coordinates (0.0-1.0).
+                            # We can construct the filter here using the center from SmartCropper.
+                            
+                            trajectory = cropper.analyze_video(input_path)
+                            if trajectory:
+                                 # Get average center (0.0 - 1.0)
+                                 centers = [t[1] for t in trajectory]
+                                 avg_center = sum(centers) / len(centers)
+                                 
+                                 # Calculate X on the SCALED video
+                                 # scaled_w = new_width
+                                 # center_pixel = scaled_w * avg_center
+                                 # top_left_x = center_pixel - (width / 2)
+                                 # Clamp
+                                 # top_left_x = max(0, min(new_width - width, top_left_x))
+                                 
+                                 smart_x_expr = f"min({new_width - width}, max(0, {new_width}*{avg_center:.3f} - {width}/2))"
+                                 logger.info(f"Smart Crop: Face Center {avg_center:.2f} -> x={smart_x_expr}")
+
+                        except Exception as e:
+                            logger.warning(f"Smart crop failed, falling back to center: {e}")
+
+                    if smart_x_expr:
+                        crop_x = smart_x_expr
+                    else:
+                        # Fallback or 'crop' mode: Center crop or estimated focus
                         focus_center = self._estimate_focus_center(input_path)
+                        crop_x = f"min({new_width - width}, max(0, {new_width}*{focus_center:.2f} - {width}/2))"
 
-                        scale_ratio = height / src_height
-                        scaled_width = src_width * scale_ratio
-                        crop_x = scaled_width * focus_center - (width / 2)
-                        crop_x = max(0.0, min(crop_x, max(scaled_width - width, 0.0)))
-
-                        # Simple smart crop without parallax for cleaner look with text
-                        filter_complex = (
-                            f"[0:v]scale=-2:{height}:force_original_aspect_ratio=increase,"
-                            f"crop={width}:{height}:{crop_x:.2f}:0,"
-                            f"setsar=1{subtitle_filter}{text_filter}[v]"
-                        )
-                        smart_crop_applied = True
+                    filter_complex = (
+                        f"[0:v]scale=-1:{height}[scaled];"
+                        f"[scaled]crop={width}:{height}:{crop_x}:0,"
+                        f"setsar=1{subtitle_filter}{text_filter}[v]"
+                    )
+                    smart_crop_applied = True
 
                 if not filter_complex:
                     # Fallback center crop
