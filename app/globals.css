@@ -141,6 +141,60 @@
   }
 }
 
+@keyframes mesh-move {
+  0% { transform: translate(0, 0) rotate(0deg); }
+  33% { transform: translate(30px, -50px) rotate(10deg); }
+  66% { transform: translate(-20px, 20px) rotate(-5deg); }
+  100% { transform: translate(0, 0) rotate(0deg); }
+}
+
 .animate-gradient-x {
   animation: gradient-x 3s ease infinite;
+}
+
+.mesh-gradient-bg {
+  background-color: var(--background);
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: -1;
+  overflow: hidden;
+}
+
+.mesh-orb-1 {
+  position: absolute;
+  top: -10%;
+  left: -10%;
+  width: 50vw;
+  height: 50vw;
+  background: radial-gradient(circle, var(--primary) 0%, transparent 70%);
+  opacity: 0.15;
+  filter: blur(80px);
+  animation: mesh-move 20s infinite ease-in-out;
+}
+
+.mesh-orb-2 {
+  position: absolute;
+  bottom: -10%;
+  right: -10%;
+  width: 60vw;
+  height: 60vw;
+  background: radial-gradient(circle, var(--accent) 0%, transparent 70%);
+  opacity: 0.15;
+  filter: blur(100px);
+  animation: mesh-move 25s infinite ease-in-out reverse;
+}
+
+.mesh-orb-3 {
+  position: absolute;
+  top: 40%;
+  left: 40%;
+  width: 40vw;
+  height: 40vw;
+  background: radial-gradient(circle, var(--secondary) 0%, transparent 70%);
+  opacity: 0.1;
+  filter: blur(90px);
+  animation: mesh-move 30s infinite ease-in-out;
 }

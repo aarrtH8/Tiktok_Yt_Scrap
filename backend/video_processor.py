@@ -679,6 +679,7 @@ class VideoProcessor:
                 )
                 
                 if result.returncode != 0:
+                    # Fallback to re-encoding concat if copy fails
                     cmd = [
                         'ffmpeg',
                         '-y',
@@ -702,6 +703,27 @@ class VideoProcessor:
                     if result.returncode != 0:
                         raise RuntimeError(f"FFmpeg concat error: {result.stderr}")
             
+            # Step 3: Silence Removal (Optional Future Toggle)
+            # self.remove_silence(output_path, output_path)
+
+            # Step 4: AI B-Roll Insertion (Simulated for Demo)
+            try:
+                from backend.b_roll_engine import BRollEngine
+                # Use a temp file for b-roll output
+                b_roll_out = work_dir / f"broll_{os.getpid()}.mp4"
+                b_roll_engine = BRollEngine(temp_dir=work_dir)
+                
+                # Check directly effectively? 
+                # For now, let's just run it if the file exists
+                if os.path.exists(output_path):
+                    final_b_roll_path = b_roll_engine.apply_b_roll(output_path, str(b_roll_out))
+                    # If success, replace output
+                    if os.path.exists(final_b_roll_path) and os.path.getsize(final_b_roll_path) > 1000:
+                        shutil.move(final_b_roll_path, output_path)
+                        logger.info("AI B-Roll applied successfully")
+            except Exception as e:
+                logger.warning(f"B-Roll insertion skipped: {e}")
+
             logger.info(f"Compilation complete: {output_path}")
             
             if not os.path.exists(output_path):
@@ -720,3 +742,128 @@ class VideoProcessor:
             raise
         finally:
             shutil.rmtree(work_dir, ignore_errors=True)
+
+    def remove_silence(self, input_path, output_path, db_threshold=-30, min_silence_duration=0.5):
+        """
+        Detects silence and removes it by creating a concatenation of non-silent parts.
+        """
+        try:
+            # 1. Detect silence
+            cmd = [
+                'ffmpeg',
+                '-i', input_path,
+                '-af', f'silencedetect=noise={db_threshold}dB:d={min_silence_duration}',
+                '-f', 'null',
+                '-'
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            output = result.stderr
+
+            # 2. Parse silence start/end
+            # [silencedetect @ 0x...] silence_start: 24.5
+            # [silencedetect @ 0x...] silence_end: 26.1 | silence_duration: 1.6
+            
+            silence_starts = []
+            silence_ends = []
+            
+            for line in output.splitlines():
+                if 'silence_start' in line:
+                    match = re.search(r'silence_start: (\d+(\.\d+)?)', line)
+                    if match:
+                        silence_starts.append(float(match.group(1)))
+                elif 'silence_end' in line:
+                    match = re.search(r'silence_end: (\d+(\.\d+)?)', line)
+                    if match:
+                        silence_ends.append(float(match.group(1)))
+
+            if not silence_starts:
+                if input_path != output_path:
+                    shutil.copy2(input_path, output_path)
+                return output_path
+
+            # Get total duration
+            duration = self._time_str_to_seconds(self._seconds_to_time_str(0)) # dummy
+            # Better to probe
+            probe = self._get_video_resolution(input_path) # Reuse probe? No, that gets res.
+            # We need duration.
+            # Let's assume we can parse it from FFmpeg output or probe it.
+            # Actually, we can just construct segments between silences.
+            
+            # Segments to KEEP:
+            # 0 -> start[0]
+            # end[0] -> start[1]
+            # end[1] -> start[2]
+            # ...
+            # end[N] -> End of Video
+            
+            segments = []
+            current_pos = 0.0
+            
+            for i in range(len(silence_starts)):
+                start = silence_starts[i]
+                if start > current_pos:
+                    segments.append((current_pos, start))
+                
+                if i < len(silence_ends):
+                     current_pos = silence_ends[i]
+            
+            # We don't know exact total duration here easily without probing again.
+            # But we can just add a segment "from last silence end to infinity" (or a very long time?)
+            # No, FFmpeg trim needs duration or we miss the end.
+            # Let's assume 'input_path' works with probe if we had a probe method exposing duration.
+            # I will trust the user won't end on silence? 
+            # Or better, just copy until the end.
+            # Actually, simple solution:
+            segments.append((current_pos, 999999.0)) # Hacky? 
+            # If we use 'trim', and duration is longer than file, it just stops.
+            
+            # Construct complex filter
+            # [0:v]trim=start=0:end=24.5,setpts=PTS-STARTPTS[v0];
+            # [0:a]atrim=start=0:end=24.5,asetpts=PTS-STARTPTS[a0];
+            # ...
+            # [v0][a0][v1][a1]...concat=n=N:v=1:a=1[outv][outa]
+            
+            filter_parts = []
+            final_map = ""
+            
+            for idx, (s, e) in enumerate(segments):
+                # Optimize: Don't include tiny segments
+                if (e - s) < 0.1: continue
+                
+                # For the last segment, if we don't know duration, we can omit 'end' parameter?
+                # trim=start=X is valid.
+                trim_args = f"start={s}"
+                if e < 900000:
+                    trim_args += f":end={e}"
+                
+                filter_parts.append(f"[0:v]trim={trim_args},setpts=PTS-STARTPTS[v{idx}]")
+                filter_parts.append(f"[0:a]atrim={trim_args},asetpts=PTS-STARTPTS[a{idx}]")
+                final_map += f"[v{idx}][a{idx}]"
+            
+            filter_complex = ";".join(filter_parts) + f";{final_map}concat=n={len(segments)}:v=1:a=1[outv][outa]"
+            
+            temp_out = input_path + "_silence_removed.mp4"
+            
+            cmd = [
+                'ffmpeg', '-y',
+                '-i', input_path,
+                '-filter_complex', filter_complex,
+                '-map', '[outv]', '-map', '[outa]',
+                '-c:v', 'libx264', '-preset', 'fast',
+                '-c:a', 'aac',
+                temp_out
+            ]
+            
+            subprocess.run(cmd, check=True)
+            
+            if os.path.exists(temp_out):
+                 if input_path == output_path:
+                     shutil.move(temp_out, output_path)
+                 else:
+                     shutil.move(temp_out, output_path)
+            
+            return output_path
+            
+        except Exception as e:
+            logger.error(f"Error removing silence: {e}")
+            return input_path # Fallback to original

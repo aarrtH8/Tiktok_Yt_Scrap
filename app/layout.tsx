@@ -39,6 +39,11 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={`font-sans antialiased`}>
+        <div className="mesh-gradient-bg">
+          <div className="mesh-orb-1" />
+          <div className="mesh-orb-2" />
+          <div className="mesh-orb-3" />
+        </div>
         <ThemeProvider
           attribute="class"
           defaultTheme="dark"

@@ -11,6 +11,8 @@ import AnimatedBackground from '@/components/animated-background';
 import { motion, AnimatePresence, useScroll, useTransform } from 'framer-motion';
 
 import TimelineEditor from '@/components/timeline-editor';
+import MagneticButton from '@/components/ui/magnetic-button';
+import ConfettiSideCannons from '@/components/ui/confetti';
 
 // Dynamically import the 3D Mascot so it only loads on client
 const HeroMascot = dynamic(() => import('@/components/hero-mascot'), { ssr: false });
@@ -426,234 +428,202 @@ export default function Home() {
           {/* LEFT COLUMN: Input & Preview */}
           <div className="space-y-6">
             <div className="glass-panel rounded-[32px] border border-border bg-card/40 p-1 shadow-2xl backdrop-blur-xl">
-              <div className="bg-card w-full rounded-[28px] p-6 min-h-[400px] border border-border/50">
+              <div className="bg-card w-full rounded-[28px] p-6 min-h-[600px] border border-border/50 relative overflow-hidden flex flex-col">
 
-                {step === 'input' && (
-                  <motion.div
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    className="space-y-8"
-                  >
-                    <div className="text-center space-y-2 mb-8">
-                      <h2 className="text-xl font-semibold text-foreground">Import Videos</h2>
-                      <p className="text-sm text-muted-foreground">Drop YouTube links to start magic</p>
-                    </div>
+                <AnimatePresence mode="wait">
+                  {step === 'input' && (
+                    <motion.div
+                      key="input"
+                      initial={{ opacity: 0, x: -20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      exit={{ opacity: 0, x: -20, filter: "blur(10px)" }}
+                      transition={{ duration: 0.4 }}
+                      className="space-y-8 flex-1"
+                    >
+                      <div className="text-center space-y-2 mb-8 pt-8">
+                        <h2 className="text-xl font-semibold text-foreground">Import Videos</h2>
+                        <p className="text-sm text-muted-foreground">Drop YouTube links to start magic</p>
+                      </div>
 
-                    <URLInput onAddVideos={handleAddVideos} />
+                      <URLInput onAddVideos={handleAddVideos} />
 
-                    {videos.length > 0 && (
-          <AnimatePresence mode="wait">
-        {step === 'input' && (
-          <motion.div
-            key="input"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95, filter: "blur(10px)" }}
-            transition={{ duration: 0.5 }}
-          >
-            <div className="container mx-auto px-4 max-w-5xl mb-12 relative z-10">
-              <URLInput onAddVideos={handleAddVideos} isProcessing={isProcessing} />
+                      {videos.length > 0 && (
+                        <VideoPreview videos={videos} onRemoveVideo={handleRemoveVideo} />
+                      )}
+                    </motion.div>
+                  )}
 
-              {(videos.length > 0 || compilationSettings) && (
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mt-8">
-                  <div className="lg:col-span-2 space-y-8">
-                    {videos.length > 0 && (
-                      <VideoPreview videos={videos} onRemoveVideo={handleRemoveVideo} />
-                    )}
-                  </div>
-                  <div>
-                    <CompilationSettings
-                      onGenerate={handleGenerate}
-                      videosCount={videos.length}
-                      isProcessing={isProcessing}
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-          </motion.div>
-        )}
-
-        {step === 'processing' && (
-          <motion.div
-            key="processing"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0, scale: 0.95, filter: "blur(20px)" }} // Dramatic exit
-            transition={{ duration: 0.8, ease: "easeInOut" }}
-            className="container mx-auto px-4 max-w-3xl py-12"
-          >
-             <ProcessingInterface
-                progress={processingProgress}
-                stage={processingStage}
-                activityLog={activityLog}
-                moments={bestMoments}
-              />
-          </motion.div>
-        )}
-
-        {step === 'editor' && (
-           <motion.div
-            key="editor"
-            initial={{ opacity: 0, scale: 1.1, filter: "blur(20px)" }} // Cinematic Reveal
-            animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
-            transition={{ duration: 1.2, ease: "anticipate" }} // Slow, heavy reveal
-            className="w-full h-[calc(100vh-100px)]"
-          >
-             <TimelineEditor
-                moments={bestMoments}
-                videoDurations={videoDurations}
-                onConfirm={handleEditorConfirm}
-                isProcessing={isProcessing}
-              />
-          </motion.div>
-        )}
-
-        {step === 'preview' && (
-          <motion.div
-            key="preview"
-            initial={{ opacity: 0, y: 50 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="container mx-auto px-4 max-w-3xl py-12"
-          >
-            <div className="text-center space-y-6">
-                <motion.div
-                    initial={{ scale: 0 }}
-                    animate={{ scale: 1 }}
-                    transition={{ type: "spring", bounce: 0.5 }}
-                    className="w-24 h-24 bg-green-500 rounded-full flex items-center justify-center mx-auto shadow-green-500/50 shadow-2xl"
-                >
-                    <span className="text-4xl">✨</span>
-                </motion.div>
-                <h2 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-green-400 to-emerald-600">
-                    Compilation Ready!
-                </h2>
-                
-                {compiledVideoUrl ? (
-                   <video 
-                      src={compiledVideoUrl} 
-                      controls 
-                      className="w-full max-w-sm mx-auto rounded-xl shadow-2xl border border-border/50"
-                    />
-                ) : (
-                    <ProcessingInterface
+                  {step === 'processing' && (
+                    <motion.div
+                      key="processing"
+                      initial={{ opacity: 0, scale: 0.95 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.95, filter: "blur(10px)" }}
+                      className="py-12 flex-1 flex flex-col justify-center"
+                    >
+                      <ProcessingInterface
                         progress={processingProgress}
                         stage={processingStage}
-                        onDownload={handleDownload}
+                        activityLog={activityLog}
                         moments={bestMoments}
-                    />
-                )}
-                
-                 <button
-                    onClick={() => {
-                        setStep('input');
-                        setVideos([]);
-                        setBestMoments([]);
-                    }}
-                    className="text-sm text-muted-foreground hover:text-foreground underline underline-offset-4"
-                  >
-                    Start New Project
-                  </button>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>justify-center bg-black/5 py-4 dark:bg-black/40">
+                      />
+                    </motion.div>
+                  )}
+
+                  {step === 'editor' && (
+                    <motion.div
+                      key="editor"
+                      initial={{ opacity: 0, scale: 1.1, filter: "blur(20px)" }}
+                      animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
+                      exit={{ opacity: 0, scale: 0.95 }}
+                      transition={{ duration: 0.8, ease: "anticipate" }}
+                      className="h-full flex-1"
+                    >
+                      <TimelineEditor
+                        moments={bestMoments}
+                        videoDurations={videoDurations}
+                        onConfirm={handleEditorConfirm}
+                        isProcessing={isProcessing}
+                      />
+                    </motion.div>
+                  )}
+
+                  {step === 'preview' && (
+                    <motion.div
+                      key="preview"
+                      initial={{ opacity: 0, y: 50 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="flex flex-col items-center justify-center space-y-8 py-12 flex-1"
+                    >
+                      <div className="text-center space-y-4">
+                        <motion.div
+                          initial={{ scale: 0 }}
+                          animate={{ scale: 1 }}
+                          transition={{ type: "spring", bounce: 0.5 }}
+                          className="w-20 h-20 bg-green-500 rounded-full flex items-center justify-center mx-auto shadow-lg shadow-green-500/30"
+                        >
+                          <span className="text-4xl">✨</span>
+                        </motion.div>
+                        <h2 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-green-400 to-emerald-600">
+                          Compilation Ready!
+                        </h2>
+                      </div>
+
                       {compiledVideoUrl ? (
-                        <video controls className="h-[500px] w-auto bg-black aspect-[9/16] rounded-lg shadow-lg">
-                          <source src={compiledVideoUrl} type="video/mp4" />
-                        </video>
+                        <div className="relative rounded-2xl overflow-hidden shadow-2xl border border-border/50 bg-black">
+                          <video
+                            src={compiledVideoUrl}
+                            controls
+                            className="max-h-[400px] w-auto aspect-[9/16]"
+                          />
+                        </div>
                       ) : (
-                        <div className="h-[500px] w-full aspect-[9/16] flex items-center justify-center bg-muted text-muted-foreground">
-                          Preparing preview...
+                        <div className="p-8 text-center text-muted-foreground bg-muted/30 rounded-xl w-full">
+                          Preparing download...
                         </div>
                       )}
-                    </div>
 
-                    <div className="grid grid-cols-2 gap-4">
-                      <button
-                        onClick={() => {
-                          setStep('input');
-                          setVideos([]);
-                          setSessionId('');
-                          setCompiledVideoUrl('');
-                          setProcessingProgress(0);
-                          setProcessingStage('idle');
-                        }}
-                        className="p-4 rounded-xl bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-all font-medium text-sm"
-                      >
-                        New Compilation
-                      </button>
-
-                      {canDownload && (
-                        <motion.button
-                          whileHover={{ scale: 1.05 }}
-                          whileTap={{ scale: 0.95 }}
-                          onClick={() => handleDownload('1080p')}
-                          className="p-4 rounded-xl bg-primary text-primary-foreground font-bold transition-all text-sm shadow-lg shadow-primary/20 flex items-center justify-center gap-2"
+                      <div className="flex gap-4 w-full max-w-sm">
+                        <button
+                          onClick={() => {
+                            setStep('input');
+                            setVideos([]);
+                            setBestMoments([]);
+                            setCompiledVideoUrl('');
+                            setProcessingProgress(0);
+                            setProcessingStage('idle');
+                          }}
+                          className="flex-1 px-6 py-3 rounded-xl bg-secondary text-secondary-foreground hover:bg-secondary/80 font-medium transition-all text-sm"
                         >
-                          <span>Download Video</span>
-                          <span className="text-xl">⬇️</span>
-                        </motion.button>
-                      )}
-                    </div>
-                  </motion.div>
-                )}
+                          New Project
+                        </button>
 
-            </div>
-          </div>
+                        {canDownload && (
+                          <div className="flex-1">
+                            <MagneticButton className="w-full">
+                              <button
+                                onClick={() => handleDownload('1080p')}
+                                className="w-full px-6 py-3 rounded-xl bg-primary text-primary-foreground font-bold shadow-lg shadow-primary/20 flex items-center justify-center gap-2 hover:scale-105 active:scale-95 transition-all text-sm"
+                              >
+                                <span>Download</span>
+                                <span>⬇️</span>
+                              </button>
+                            </MagneticButton>
+                          </div>
+                        )}
+                      </div>
+                      <ConfettiSideCannons />
+                    </motion.div>
+                  )}
+                </AnimatePresence>
 
-          {/* Caption Section */}
-          <AnimatePresence>
-            {tiktokCaption && (
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="glass-panel rounded-[24px] border border-border p-6 space-y-4 bg-card/80 backdrop-blur-md"
-              >
-                <div className="flex items-center justify-between">
-                  <h3 className="font-semibold text-foreground">Generated Caption</h3>
-                  <button
-                    onClick={() => navigator.clipboard?.writeText(tiktokCaption)}
-                    className="text-xs font-mono bg-primary/20 text-primary px-3 py-1 rounded-full hover:bg-primary/30 transition-colors"
-                  >
-                    COPY
-                  </button>
-                </div>
-                <div className="p-4 rounded-xl bg-muted border border-border">
-                  <pre className="whitespace-pre-wrap font-sans text-sm text-foreground/80 leading-relaxed">
-                    {tiktokCaption}
-                  </pre>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
-
-        {/* RIGHT COLUMN: Settings */}
-        <div className="lg:sticky lg:top-8 space-y-6">
-          <CompilationSettings
-            onGenerate={handleGenerate}
-            videosCount={videos.length}
-            isProcessing={isProcessing}
-          />
-
-          {/* Pro Tip Card */}
-          <div className="glass-panel p-6 rounded-3xl border border-white/5 bg-gradient-to-br from-primary/5 to-transparent">
-            <div className="flex gap-4">
-              <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary text-lg">
-                💡
-              </div>
-              <div>
-                <h4 className="font-semibold text-white mb-1">Pro Tip</h4>
-                <p className="text-sm text-white/60 leading-relaxed">
-                  For best results, use videos with clear speech. AI will auto-sync captions to the spoken audio.
-                </p>
               </div>
             </div>
           </div>
-        </div>
 
-    </div>
+          {/* RIGHT COLUMN: Settings */}
+          <div className="lg:sticky lg:top-8 space-y-6">
+            <AnimatePresence>
+              {(videos.length > 0 || compilationSettings) && (
+                <motion.div
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                >
+                  <CompilationSettings
+                    onGenerate={handleGenerate}
+                    videosCount={videos.length}
+                    isProcessing={isProcessing}
+                  />
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* Pro Tip Card */}
+            <div className="glass-panel p-6 rounded-3xl border border-white/5 bg-gradient-to-br from-primary/5 to-transparent">
+              <div className="flex gap-4">
+                <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary text-lg">
+                  💡
+                </div>
+                <div>
+                  <h4 className="font-semibold text-white mb-1">Pro Tip</h4>
+                  <p className="text-sm text-white/60 leading-relaxed">
+                    For best results, use videos with clear speech. AI will auto-sync captions to the spoken audio.
+                  </p>
+                  <p className="text-xs text-white/40 mt-2 italic">
+                    Try adding keyword rich captions for better engagement!
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Caption Preview (moved here for better layout) */}
+            <AnimatePresence>
+              {tiktokCaption && (
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="glass-panel rounded-[24px] border border-border p-6 space-y-4 bg-card/80 backdrop-blur-md"
+                >
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-semibold text-foreground">Generated Caption</h3>
+                    <button
+                      onClick={() => navigator.clipboard?.writeText(tiktokCaption)}
+                      className="text-xs font-mono bg-primary/20 text-primary px-3 py-1 rounded-full hover:bg-primary/30 transition-colors"
+                    >
+                      COPY
+                    </button>
+                  </div>
+                  <div className="p-4 rounded-xl bg-muted border border-border">
+                    <pre className="whitespace-pre-wrap font-sans text-sm text-foreground/80 leading-relaxed">
+                      {tiktokCaption}
+                    </pre>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+
+        </div>
 
       </main >
     </div >
