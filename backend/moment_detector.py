@@ -219,12 +219,15 @@ class MomentDetector:
                     video_duration,
                     scene_times
                 )
+                if np.isnan(start_time): start_time = 0.0
+                if np.isnan(end_time): end_time = start_time + clip_len
+                
                 minutes = int(start_time // 60)
                 seconds = int(start_time % 60)
 
                 moments.append({
-                    'start': start_time,
-                    'end': end_time,
+                    'start': float(start_time),
+                    'end': float(end_time),
                     'timestamp': f"{minutes}:{seconds:02d}",
                     'duration': f"{int(end_time - start_time)}s",
                     'title': self._generate_moment_title(idx, moment['score']),

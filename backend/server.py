@@ -9,7 +9,9 @@ from flask_cors import CORS
 import os
 import sys
 import json
+import math
 import uuid
+import shutil
 import logging
 import tempfile
 import subprocess
@@ -449,7 +451,7 @@ def _run_analysis(session_id, videos, settings, output_duration, auto_detect, in
                 end_time = min(video_duration, slice_duration)
                 top_moments.append({
                     'start': 0.0,
-                    'end': end_time,
+                    'end': float(end_time),
                     'timestamp': "0:00",
                     'duration': f"{int(end_time)}s",
                     'title': f"Extrait principal · {video.get('title')}",
@@ -461,6 +463,22 @@ def _run_analysis(session_id, videos, settings, output_duration, auto_detect, in
                     'filename': os.path.basename(downloaded_files[idx]) if downloaded_files[idx] else None,
                     'id': str(uuid.uuid4()) # Unique ID for frontend reordering
                 })
+        
+        # FINAL SANITIZATION
+        # Ensure no NaNs slip through which would break JSON
+        sanitized_moments = []
+        for m in top_moments:
+            try:
+                s = float(m.get('start', 0))
+                e = float(m.get('end', 0))
+                if math.isnan(s): s = 0.0
+                if math.isnan(e): e = s + 5.0
+                m['start'] = s
+                m['end'] = e
+                sanitized_moments.append(m)
+            except:
+                continue
+        top_moments = sanitized_moments
 
         # Don't clamp yet, let the user edit
         session_data = sessions.get(session_id, {})
